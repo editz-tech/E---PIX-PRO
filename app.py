@@ -1,8 +1,9 @@
 from __future__ import annotations
 import os, sys, traceback
 from pathlib import Path
-from PIL import Image, ImageOps
-from rembg import new_session, remove
+import numpy as np
+import onnxruntime as ort
+from PIL import Image, ImageOps, ImageFilter
 from PySide6.QtCore import QObject, Signal, QThread
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox)
 
@@ -12,6 +13,36 @@ DPI = 300
 
 def resource_path(name):
     return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / name
+
+class U2NetSession:
+    """Direct U2NETP inference without rembg, pymatting or numba."""
+    def __init__(self, model_path):
+        options = ort.SessionOptions()
+        options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        self.session = ort.InferenceSession(
+            str(model_path), sess_options=options, providers=["CPUExecutionProvider"]
+        )
+        self.input_name = self.session.get_inputs()[0].name
+
+    def remove_background(self, image):
+        rgb = image.convert("RGB")
+        resized = rgb.resize((320, 320), Image.Resampling.BILINEAR)
+        pixels = np.asarray(resized, dtype=np.float32) / 255.0
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        tensor = ((pixels - mean) / std).transpose(2, 0, 1)[None, ...].astype(np.float32)
+        prediction = self.session.run(None, {self.input_name: tensor})[0][0, 0]
+        low, high = float(prediction.min()), float(prediction.max())
+        if high - low < 1e-8:
+            raise RuntimeError("AI model returned an invalid foreground mask.")
+        mask = np.clip((prediction - low) / (high - low), 0.0, 1.0)
+        mask_image = Image.fromarray(np.uint8(mask * 255), mode="L")
+        mask_image = mask_image.resize(rgb.size, Image.Resampling.BICUBIC)
+        mask_image = mask_image.filter(ImageFilter.GaussianBlur(radius=0.45))
+        rgba = rgb.convert("RGBA")
+        rgba.putalpha(mask_image)
+        return rgba
+
 
 def output_path_for(source, output_dir):
     # Keep the exact original filename. Never silently append suffixes or overwrite.
@@ -25,7 +56,7 @@ def output_path_for(source, output_dir):
 def process_photo(source, destination, session):
     with Image.open(source) as opened:
         original = ImageOps.exif_transpose(opened).convert("RGBA")
-    cutout = remove(original, session=session).convert("RGBA")
+    cutout = session.remove_background(original)
     background = Image.new("RGBA", cutout.size, (255, 255, 255, 255))
     background.alpha_composite(cutout)
     result = background.convert("RGB")
@@ -65,7 +96,7 @@ class Worker(QObject):
             os.environ["U2NET_HOME"] = str(model_dir)
             model = model_dir / "u2netp.onnx"
             if not model.exists(): raise RuntimeError("Offline AI model missing. Reinstall the application.")
-            session = new_session("u2netp", model_path=str(model))
+            session = U2NetSession(model)
             ok = errors = 0
             for i, src in enumerate(self.files, 1):
                 try:
