@@ -35,8 +35,22 @@ def process_photo(source, destination, session):
     else:
         nh = int(w / RATIO); top = (h - nh) // 2
         result = result.crop((0, top, w, top + nh))
+    # Standard 35 × 45 mm at 300 DPI (approximately 413 × 531 pixels).
+    result = result.resize((413, 531), Image.Resampling.LANCZOS)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    result.save(destination, "JPEG", quality=95, dpi=(DPI, DPI), optimize=True)
+    suffix = destination.suffix.lower()
+    if suffix in (".jpg", ".jpeg"):
+        result.save(destination, "JPEG", quality=95, dpi=(DPI, DPI), optimize=True)
+    elif suffix == ".png":
+        result.save(destination, "PNG", dpi=(DPI, DPI), optimize=True)
+    elif suffix in (".tif", ".tiff"):
+        result.save(destination, "TIFF", dpi=(DPI, DPI), compression="tiff_lzw")
+    elif suffix == ".bmp":
+        result.save(destination, "BMP", dpi=(DPI, DPI))
+    elif suffix == ".webp":
+        result.save(destination, "WEBP", quality=95, method=6)
+    else:
+        raise ValueError(f"Unsupported output format: {suffix}")
 
 class Worker(QObject):
     progress = Signal(int, int, str)
@@ -54,7 +68,7 @@ class Worker(QObject):
             ok = errors = 0
             for i, src in enumerate(self.files, 1):
                 try:
-                    target = unique_output(self.output / (src.stem + ".jpg"))
+                    target = unique_output(self.output / src.name)
                     process_photo(src, target, session); ok += 1
                     self.progress.emit(i, len(self.files), f"Saved: {src.name} → {target.name}")
                 except Exception as exc:
