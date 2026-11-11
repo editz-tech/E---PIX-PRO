@@ -13,13 +13,14 @@ DPI = 300
 def resource_path(name):
     return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / name
 
-def unique_output(path):
-    if not path.exists(): return path
-    n = 2
-    while True:
-        candidate = path.with_name(f"{path.stem} ({n}){path.suffix}")
-        if not candidate.exists(): return candidate
-        n += 1
+def output_path_for(source, output_dir):
+    # Keep the exact original filename. Never silently append suffixes or overwrite.
+    target = output_dir / source.name
+    if target.resolve() == source.resolve():
+        raise FileExistsError("Output folder is the same as the source location; choose a separate output folder.")
+    if target.exists():
+        raise FileExistsError(f"An output file named '{source.name}' already exists. Move it or choose another output folder.")
+    return target
 
 def process_photo(source, destination, session):
     with Image.open(source) as opened:
@@ -68,7 +69,7 @@ class Worker(QObject):
             ok = errors = 0
             for i, src in enumerate(self.files, 1):
                 try:
-                    target = unique_output(self.output / src.name)
+                    target = output_path_for(src, self.output)
                     process_photo(src, target, session); ok += 1
                     self.progress.emit(i, len(self.files), f"Saved: {src.name} → {target.name}")
                 except Exception as exc:
