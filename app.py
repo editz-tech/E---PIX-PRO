@@ -103,7 +103,68 @@ class MainWindow(QMainWindow):
         self.log = QTextEdit(); self.log.setReadOnly(True); layout.addWidget(self.log)
         note = QLabel("AI removes the background and adds white. It does not change pose, gaze, expression, clothing or facial features. Review each photo before official use.")
         note.setWordWrap(True); note.setStyleSheet("color:#e3b341;"); layout.addWidget(note)
-        self.setStyleSheet("QMainWindow,QWidget{background:#101820;color:#e8eef5;} QGroupBox{border:1px solid #34495e;border-radius:8px;margin-top:8px;padding:10px;} QPushButton{padding:9px;background:#263746;border:1px solid #456078;border-radius:5px;} QPushButton:hover{background:#34516a;} QLineEdit,QTextEdit{background:#17232e;border:1px solid #34495e;padding:7px;}")
+        self.setStyleSheet("""
+            QMainWindow, QWidget {
+                background: #0b1220;
+                color: #e7edf7;
+                font-family: "Segoe UI";
+                font-size: 10pt;
+            }
+            QLabel { color: #dce6f3; }
+            QGroupBox {
+                background: #111c2d;
+                border: 1px solid #263a55;
+                border-radius: 12px;
+                margin-top: 14px;
+                padding: 14px 12px 12px 12px;
+                font-size: 10pt;
+                font-weight: 600;
+                color: #9fc5f5;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px;
+            }
+            QPushButton {
+                background: #1b2b40;
+                color: #edf5ff;
+                border: 1px solid #36516f;
+                border-radius: 8px;
+                padding: 10px 14px;
+                min-height: 18px;
+                font-weight: 600;
+            }
+            QPushButton:hover { background: #263f5c; border-color: #5b91c8; }
+            QPushButton:pressed { background: #142338; }
+            QPushButton:disabled { color: #718096; background: #172235; border-color: #263246; }
+            QLineEdit, QTextEdit {
+                background: #0d1726;
+                color: #edf4ff;
+                border: 1px solid #2c405a;
+                border-radius: 7px;
+                padding: 9px;
+                selection-background-color: #2878bd;
+            }
+            QLineEdit:focus, QTextEdit:focus { border: 1px solid #4b9ce2; }
+            QProgressBar {
+                background: #172438;
+                border: 1px solid #2d425d;
+                border-radius: 7px;
+                min-height: 14px;
+                text-align: center;
+                color: #ffffff;
+            }
+            QProgressBar::chunk { background: #2587ce; border-radius: 6px; }
+            QCheckBox { spacing: 8px; color: #b9c9dc; }
+            QCheckBox::indicator {
+                width: 16px; height: 16px;
+                border: 1px solid #52708f;
+                border-radius: 4px;
+                background: #0d1726;
+            }
+            QCheckBox::indicator:checked { background: #2587ce; border-color: #2587ce; }
+        """)
     def set_files(self, files):
         self.files = list(dict.fromkeys(Path(f) for f in files if Path(f).suffix.lower() in {".jpg",".jpeg",".png",".bmp",".webp",".tif",".tiff"}))
         self.count.setText(f"{len(self.files)} photo(s) selected")
