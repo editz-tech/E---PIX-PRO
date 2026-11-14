@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os, sys, traceback
 from pathlib import Path
+import cv2
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter
@@ -53,26 +54,72 @@ def output_path_for(source, output_dir):
         raise FileExistsError(f"An output file named '{source.name}' already exists. Move it or choose another output folder.")
     return target
 
+def detect_face_box(image):
+    """Return the largest frontal-face box, or None when no reliable face is found."""
+    rgb = np.asarray(image.convert("RGB"))
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+    detector = cv2.CascadeClassifier(str(cascade_path))
+    if detector.empty():
+        raise RuntimeError("The bundled face-detection model could not be loaded.")
+    min_side = max(40, int(min(gray.shape[:2]) * 0.08))
+    faces = detector.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=5,
+        flags=cv2.CASCADE_SCALE_IMAGE, minSize=(min_side, min_side)
+    )
+    if len(faces) == 0:
+        return None
+    x, y, width, height = max(faces, key=lambda box: int(box[2]) * int(box[3]))
+    return int(x), int(y), int(width), int(height)
+
+
+def passport_crop(image, face_box=None):
+    """Create a 35:45 crop; align a detected face and pad out-of-frame areas white."""
+    width, height = image.size
+    if face_box:
+        x, y, face_w, face_h = face_box
+        crop_h = max(1, int(round(face_h / 0.68)))
+        crop_w = max(1, int(round(crop_h * RATIO)))
+        # Place the eye line near 40% of the final photo height.
+        eye_line = y + face_h * 0.40
+        top = int(round(eye_line - crop_h * 0.40))
+        center_x = x + face_w / 2
+        left = int(round(center_x - crop_w / 2))
+    else:
+        # Safe fallback for profiles, occluded faces, or difficult lighting.
+        if width / height > RATIO:
+            crop_h = height
+            crop_w = int(round(height * RATIO))
+        else:
+            crop_w = width
+            crop_h = int(round(width / RATIO))
+        left = (width - crop_w) // 2
+        top = (height - crop_h) // 2
+
+    # Never introduce black/transparent borders when the ideal crop exceeds the source.
+    framed = Image.new("RGB", (crop_w, crop_h), (255, 255, 255))
+    source_left, source_top = max(0, left), max(0, top)
+    source_right, source_bottom = min(width, left + crop_w), min(height, top + crop_h)
+    if source_right > source_left and source_bottom > source_top:
+        piece = image.crop((source_left, source_top, source_right, source_bottom))
+        framed.paste(piece, (source_left - left, source_top - top))
+    return framed
+
+
 def process_photo(source, destination, session):
     with Image.open(source) as opened:
         original = ImageOps.exif_transpose(opened).convert("RGBA")
+    face_box = detect_face_box(original)
     cutout = session.remove_background(original)
     background = Image.new("RGBA", cutout.size, (255, 255, 255, 255))
     background.alpha_composite(cutout)
-    result = background.convert("RGB")
-    w, h = result.size
-    if w / h > RATIO:
-        nw = int(h * RATIO); left = (w - nw) // 2
-        result = result.crop((left, 0, left + nw, h))
-    else:
-        nh = int(w / RATIO); top = (h - nh) // 2
-        result = result.crop((0, top, w, top + nh))
+    result = passport_crop(background.convert("RGB"), face_box)
     # Standard 35 × 45 mm at 300 DPI (approximately 413 × 531 pixels).
     result = result.resize((413, 531), Image.Resampling.LANCZOS)
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
     if suffix in (".jpg", ".jpeg"):
-        result.save(destination, "JPEG", quality=95, dpi=(DPI, DPI), optimize=True)
+        result.save(destination, "JPEG", quality=96, dpi=(DPI, DPI), optimize=True)
     elif suffix == ".png":
         result.save(destination, "PNG", dpi=(DPI, DPI), optimize=True)
     elif suffix in (".tif", ".tiff"):
@@ -80,9 +127,10 @@ def process_photo(source, destination, session):
     elif suffix == ".bmp":
         result.save(destination, "BMP", dpi=(DPI, DPI))
     elif suffix == ".webp":
-        result.save(destination, "WEBP", quality=95, method=6)
+        result.save(destination, "WEBP", quality=96, method=6)
     else:
         raise ValueError(f"Unsupported output format: {suffix}")
+    return "face-aligned" if face_box else "center-crop fallback"
 
 class Worker(QObject):
     progress = Signal(int, int, str)
@@ -101,8 +149,8 @@ class Worker(QObject):
             for i, src in enumerate(self.files, 1):
                 try:
                     target = output_path_for(src, self.output)
-                    process_photo(src, target, session); ok += 1
-                    self.progress.emit(i, len(self.files), f"Saved: {src.name} → {target.name}")
+                    framing = process_photo(src, target, session); ok += 1
+                    self.progress.emit(i, len(self.files), f"Saved ({framing}): {src.name} → {target.name}")
                 except Exception as exc:
                     errors += 1; self.progress.emit(i, len(self.files), f"FAILED: {src.name}: {exc}")
             self.done.emit(ok, errors)
@@ -132,7 +180,7 @@ class MainWindow(QMainWindow):
         self.progress = QProgressBar(); layout.addWidget(self.progress)
         self.status = QLabel("Ready • Original photos are never modified."); layout.addWidget(self.status)
         self.log = QTextEdit(); self.log.setReadOnly(True); layout.addWidget(self.log)
-        note = QLabel("AI removes the background and adds white. It does not change pose, gaze, expression, clothing or facial features. Review each photo before official use.")
+        note = QLabel("AI removes the background, detects frontal faces offline, and aligns the crop where detection succeeds. If no face is detected, a centred crop is used. It does not change pose, gaze, expression, clothing or facial features. Review every photo against the issuing authority rules.")
         note.setWordWrap(True); note.setStyleSheet("color:#e3b341;"); layout.addWidget(note)
         self.setStyleSheet("""
             QMainWindow, QWidget {
