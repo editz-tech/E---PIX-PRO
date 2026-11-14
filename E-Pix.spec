@@ -2,7 +2,7 @@ from PyInstaller.utils.hooks import collect_all
 datas = [("models/u2netp.onnx", "models")]
 binaries = []
 hiddenimports = []
-for package in ("onnxruntime", "PIL", "numpy"):
+for package in ("onnxruntime", "PIL", "numpy", "cv2"):
     d, b, h = collect_all(package)
     datas += d
     binaries += b
