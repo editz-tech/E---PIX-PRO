@@ -92,7 +92,7 @@ def passport_crop(image, face_box=None):
         crop_h = min(height, max(1, int(round(face_h / target_face_fraction))))
         crop_w = max(1, int(round(crop_h * RATIO)))
 
-        estimated_head_top = max(0.0, y - face_h * 0.35)
+        estimated_head_top = max(0.0, y - face_h * 0.40)
         top = int(round(estimated_head_top - crop_h * 0.02))
         center_x = x + face_w / 2.0
         left = int(round(center_x - crop_w / 2.0))
