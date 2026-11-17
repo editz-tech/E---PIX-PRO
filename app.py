@@ -74,20 +74,26 @@ def detect_face_box(image):
 
 
 def passport_crop(image, face_box=None):
-    """Create a 35:45 portrait crop while preserving the full head and more shoulders."""
+    """Create a 35:45 portrait crop with close head-and-shoulders framing.
+
+    The target face-box height is about 51% of the final image height, matching
+    the user's supplied reference: a larger head, a small hair margin, and less
+    unnecessary chest area while retaining both shoulders where the source allows.
+    """
     width, height = image.size
     if face_box:
         x, y, face_w, face_h = face_box
 
-        # Haar detects the central face, not the hairline. The previous 68% target
-        # made the crop far too short and pushed the top edge into the hair.
-        # Use a much wider vertical frame and estimate the top of the head above
-        # the detected face. Keep a small, deliberate margin above the hair.
-        crop_h = min(height, max(1, int(round(face_h / 0.43))))
+        # Haar detects the central face, not the hairline. Estimate the top of
+        # the hair above the detected face and reserve only a small top margin.
+        # A 0.51 face-height fraction matches the user's reference framing;
+        # the previous 0.43 fraction made the face noticeably too small.
+        target_face_fraction = 0.51
+        crop_h = min(height, max(1, int(round(face_h / target_face_fraction))))
         crop_w = max(1, int(round(crop_h * RATIO)))
 
-        estimated_head_top = max(0.0, y - face_h * 0.38)
-        top = int(round(estimated_head_top - crop_h * 0.035))
+        estimated_head_top = max(0.0, y - face_h * 0.35)
+        top = int(round(estimated_head_top - crop_h * 0.02))
         center_x = x + face_w / 2.0
         left = int(round(center_x - crop_w / 2.0))
 
