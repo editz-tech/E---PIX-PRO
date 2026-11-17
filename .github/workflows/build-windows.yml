@@ -51,7 +51,7 @@ jobs:
           [Run]
           Filename: "{app}\E-PIX PRO.exe"; Description: "Launch E-PIX PRO"; Flags: nowait postinstall skipifsilent
           '@ | Set-Content installer\setup.iss
-          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" installer\setup.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\setup.iss
       - uses: actions/upload-artifact@v4
         with:
           name: E-PIX-PRO-Windows-Installer
