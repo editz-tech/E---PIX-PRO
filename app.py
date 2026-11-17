@@ -74,17 +74,29 @@ def detect_face_box(image):
 
 
 def passport_crop(image, face_box=None):
-    """Create a 35:45 crop; align a detected face and pad out-of-frame areas white."""
+    """Create a 35:45 portrait crop while preserving the full head and more shoulders."""
     width, height = image.size
     if face_box:
         x, y, face_w, face_h = face_box
-        crop_h = max(1, int(round(face_h / 0.68)))
+
+        # Haar detects the central face, not the hairline. The previous 68% target
+        # made the crop far too short and pushed the top edge into the hair.
+        # Use a much wider vertical frame and estimate the top of the head above
+        # the detected face. Keep a small, deliberate margin above the hair.
+        crop_h = min(height, max(1, int(round(face_h / 0.43))))
         crop_w = max(1, int(round(crop_h * RATIO)))
-        # Place the eye line near 40% of the final photo height.
-        eye_line = y + face_h * 0.40
-        top = int(round(eye_line - crop_h * 0.40))
-        center_x = x + face_w / 2
-        left = int(round(center_x - crop_w / 2))
+
+        estimated_head_top = max(0.0, y - face_h * 0.38)
+        top = int(round(estimated_head_top - crop_h * 0.035))
+        center_x = x + face_w / 2.0
+        left = int(round(center_x - crop_w / 2.0))
+
+        # Keep the crop inside the source whenever possible. If the source is
+        # shorter than the desired framing, the white padding below is used.
+        if height >= crop_h:
+            top = max(0, min(top, height - crop_h))
+        if width >= crop_w:
+            left = max(0, min(left, width - crop_w))
     else:
         # Safe fallback for profiles, occluded faces, or difficult lighting.
         if width / height > RATIO:
@@ -96,7 +108,8 @@ def passport_crop(image, face_box=None):
         left = (width - crop_w) // 2
         top = (height - crop_h) // 2
 
-    # Never introduce black/transparent borders when the ideal crop exceeds the source.
+    # White padding avoids black/transparent borders if the ideal crop exceeds
+    # the original photograph; source pixels are never stretched to fill gaps.
     framed = Image.new("RGB", (crop_w, crop_h), (255, 255, 255))
     source_left, source_top = max(0, left), max(0, top)
     source_right, source_bottom = min(width, left + crop_w), min(height, top + crop_h)
