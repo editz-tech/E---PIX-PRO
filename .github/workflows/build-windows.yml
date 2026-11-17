@@ -42,7 +42,7 @@ jobs:
           SolidCompression=yes
           ArchitecturesInstallIn64BitMode=x64
           [Files]
-          Source: "dist\E-PIX PRO\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+          Source: "..\dist\E-PIX PRO\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
           [Icons]
           Name: "{autoprograms}\E-PIX PRO"; Filename: "{app}\E-PIX PRO.exe"
           Name: "{autodesktop}\E-PIX PRO"; Filename: "{app}\E-PIX PRO.exe"; Tasks: desktopicon
