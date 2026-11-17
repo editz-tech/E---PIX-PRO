@@ -1,6 +1,9 @@
 name: Build E-PIX PRO Windows installer
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - fix/reference-photo-framing
 permissions:
   contents: read
 jobs:
