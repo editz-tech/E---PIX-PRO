@@ -10,7 +10,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
 
 APP_NAME = "E-PIX PRO"
 RATIO = 35 / 45
-DPI = 300
+# Match the supplied demo image's pixel dimensions and preserve 35 × 45 mm print sizing.
+OUTPUT_SIZE = (1103, 1426)
+DPI = (800, 805)
 
 def resource_path(name):
     return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / name
@@ -127,12 +129,14 @@ def process_photo(source, destination, session):
     background = Image.new("RGBA", cutout.size, (255, 255, 255, 255))
     background.alpha_composite(cutout)
     result = passport_crop(background.convert("RGB"), face_box)
-    # Standard 35 × 45 mm at 300 DPI (approximately 413 × 531 pixels).
-    result = result.resize((413, 531), Image.Resampling.LANCZOS)
+    # Render at the supplied demo's pixel dimensions instead of shrinking to 413 × 531.
+    result = result.resize(OUTPUT_SIZE, Image.Resampling.LANCZOS)
+    # Restrained sharpening; no skin smoothing, facial reshaping, or clothing changes.
+    result = result.filter(ImageFilter.UnsharpMask(radius=1.0, percent=105, threshold=3))
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
     if suffix in (".jpg", ".jpeg"):
-        result.save(destination, "JPEG", quality=96, dpi=(DPI, DPI), optimize=True)
+        result.save(destination, "JPEG", quality=96, dpi=DPI, optimize=True)
     elif suffix == ".png":
         result.save(destination, "PNG", dpi=(DPI, DPI), optimize=True)
     elif suffix in (".tif", ".tiff"):
@@ -176,7 +180,7 @@ class MainWindow(QMainWindow):
         root = QWidget(); self.setCentralWidget(root); layout = QVBoxLayout(root)
         title = QLabel("E-PIX PRO"); title.setStyleSheet("font-size:28px;font-weight:700;color:#58a6ff;")
         layout.addWidget(title)
-        layout.addWidget(QLabel("OFFLINE PASSPORT & ID PHOTO STUDIO  •  35 × 45 mm  •  300 DPI"))
+        layout.addWidget(QLabel("OFFLINE PASSPORT & ID PHOTO STUDIO  •  35 × 45 mm  •  Demo-resolution output"))
         group = QGroupBox("1. Select photos"); row = QHBoxLayout(group)
         self.count = QLabel("No photos selected")
         for label, handler in [("Choose Photo", self.choose_single), ("Choose Multiple Photos", self.choose_multiple), ("Choose Folder", self.choose_folder)]:
