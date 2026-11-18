@@ -4,7 +4,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import onnxruntime as ort
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image, ImageOps, ImageFilter, ImageEnhance
 from PySide6.QtCore import QObject, Signal, QThread
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox)
 
@@ -120,11 +120,15 @@ def passport_crop(image, face_box=None):
     width, height = image.size
     if face_box:
         x, y, face_w, face_h = face_box
-        # FaceMesh follows the face contour, not the hairstyle. Estimate hair above
-        # the forehead and reserve a small top margin. The face occupies ~56% of
-        # the frame height, producing a larger, more demo-like head-and-shoulders crop.
-        crop_h = min(height, max(1, int(round(face_h / 0.56))))
-        crop_w = max(1, int(round(crop_h * RATIO)))
+        # Match the supplied demo framing: facial width is approximately 57%
+        # of the photo width (about 630 px in a 1103 px image), which gives
+        # roughly 44% facial height in a 35:45 portrait. FaceMesh bounds the
+        # visible face, not the hairstyle, so reserve space above the forehead.
+        target_face_width_ratio = 0.57
+        crop_w = max(1, int(round(face_w / target_face_width_ratio)))
+        crop_h = max(1, int(round(crop_w / RATIO)))
+        # Estimate the hairline from the upper face contour and leave a small
+        # clean margin above the hair, matching the demo's head placement.
         estimated_head_top = max(0.0, y - face_h * 0.27)
         top = int(round(estimated_head_top - crop_h * 0.035))
         center_x = x + face_w / 2.0
@@ -152,6 +156,15 @@ def process_photo(source, destination, session, face_analyzer):
         original = ImageOps.exif_transpose(opened).convert("RGBA")
     original, face_box, roll = straighten_roll(original, face_analyzer)
     cutout = session.remove_background(original)
+    # Gentle exposure/contrast correction on the person only. This brightens
+    # underexposed source photos toward the demo's clearer studio look while
+    # keeping natural skin texture and clothing hue intact. No skin smoothing,
+    # saturation boost, facial reshaping or clothing recolouring is applied.
+    subject_rgb = cutout.convert("RGB")
+    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.08)
+    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(1.04)
+    cutout = subject_rgb.convert("RGBA")
+    cutout.putalpha(session.remove_background(original).getchannel("A"))
     background = Image.new("RGBA", cutout.size, (255, 255, 255, 255))
     background.alpha_composite(cutout)
     result = passport_crop(background.convert("RGB"), face_box)
