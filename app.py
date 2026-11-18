@@ -120,17 +120,19 @@ def passport_crop(image, face_box=None):
     width, height = image.size
     if face_box:
         x, y, face_w, face_h = face_box
-        # Match the supplied demo framing: facial width is approximately 57%
-        # of the photo width (about 630 px in a 1103 px image), which gives
-        # roughly 44% facial height in a 35:45 portrait. FaceMesh bounds the
-        # visible face, not the hairstyle, so reserve space above the forehead.
-        target_face_width_ratio = 0.57
+        # Calibrated against the user's paired 1103x1426 reference outputs.
+        # Haar face bounds measured 789 px wide in the over-zoomed result and
+        # 630 px in the desired demo (same horizontal centre). Increase the
+        # crop window by 789/630 ~= 1.252 so the processed face scales down to
+        # the demo's size. FaceMesh's landmark box is narrower than Haar's
+        # visible face box, so the calibrated target ratio is 0.455, not 0.57.
+        target_face_width_ratio = 0.455
         crop_w = max(1, int(round(face_w / target_face_width_ratio)))
         crop_h = max(1, int(round(crop_w / RATIO)))
-        # Estimate the hairline from the upper face contour and leave a small
-        # clean margin above the hair, matching the demo's head placement.
+        # Move the crop window slightly upward so the head sits lower in the
+        # final image, matching the demo's top-of-head position.
         estimated_head_top = max(0.0, y - face_h * 0.27)
-        top = int(round(estimated_head_top - crop_h * 0.035))
+        top = int(round(estimated_head_top - crop_h * 0.063))
         center_x = x + face_w / 2.0
         left = int(round(center_x - crop_w / 2.0))
         if height >= crop_h:
