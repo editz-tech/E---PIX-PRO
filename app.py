@@ -160,11 +160,12 @@ def process_photo(source, destination, session, face_analyzer):
     # underexposed source photos toward the demo's clearer studio look while
     # keeping natural skin texture and clothing hue intact. No skin smoothing,
     # saturation boost, facial reshaping or clothing recolouring is applied.
+    subject_alpha = cutout.getchannel("A")
     subject_rgb = cutout.convert("RGB")
     subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.08)
     subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(1.04)
     cutout = subject_rgb.convert("RGBA")
-    cutout.putalpha(session.remove_background(original).getchannel("A"))
+    cutout.putalpha(subject_alpha)
     background = Image.new("RGBA", cutout.size, (255, 255, 255, 255))
     background.alpha_composite(cutout)
     result = passport_crop(background.convert("RGB"), face_box)
