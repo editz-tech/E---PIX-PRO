@@ -38,10 +38,16 @@ class U2NetSession:
         low, high = float(prediction.min()), float(prediction.max())
         if high - low < 1e-8:
             raise RuntimeError("AI model returned an invalid foreground mask.")
-        mask = np.clip((prediction - low) / (high - low), 0.0, 1.0)
+        # Avoid per-image min/max stretching, which amplifies background haze.
+        # U2NETP emits a foreground confidence map; apply a gentle confidence
+        # remap and smoothstep to suppress low-confidence grey fringes.
+        mask = np.clip(prediction, 0.0, 1.0)
+        lo, hi = 0.06, 0.78
+        mask = np.clip((mask - lo) / (hi - lo), 0.0, 1.0)
+        mask = mask * mask * (3.0 - 2.0 * mask)
         mask_image = Image.fromarray(np.uint8(mask * 255), mode="L")
-        mask_image = mask_image.resize(rgb.size, Image.Resampling.BICUBIC)
-        mask_image = mask_image.filter(ImageFilter.GaussianBlur(radius=0.45))
+        mask_image = mask_image.resize(rgb.size, Image.Resampling.LANCZOS)
+        mask_image = mask_image.filter(ImageFilter.GaussianBlur(radius=0.25))
         rgba = rgb.convert("RGBA")
         rgba.putalpha(mask_image)
         return rgba
@@ -56,62 +62,83 @@ def output_path_for(source, output_dir):
         raise FileExistsError(f"An output file named '{source.name}' already exists. Move it or choose another output folder.")
     return target
 
-def detect_face_box(image):
-    """Return the largest frontal-face box, or None when no reliable face is found."""
-    rgb = np.asarray(image.convert("RGB"))
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
-    detector = cv2.CascadeClassifier(str(cascade_path))
-    if detector.empty():
-        raise RuntimeError("The bundled face-detection model could not be loaded.")
-    min_side = max(40, int(min(gray.shape[:2]) * 0.08))
-    faces = detector.detectMultiScale(
-        gray, scaleFactor=1.1, minNeighbors=5,
-        flags=cv2.CASCADE_SCALE_IMAGE, minSize=(min_side, min_side)
-    )
-    if len(faces) == 0:
-        return None
-    x, y, width, height = max(faces, key=lambda box: int(box[2]) * int(box[3]))
-    return int(x), int(y), int(width), int(height)
+class FaceAnalyzer:
+    """MediaPipe facial landmarks for eye-line roll correction and face framing.
+
+    Only in-plane roll is corrected. Yaw/pitch are never synthesized or warped.
+    """
+    def __init__(self):
+        import mediapipe as mp
+        self._mesh = mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=True, max_num_faces=1, refine_landmarks=True,
+            min_detection_confidence=0.60
+        )
+
+    def analyze(self, image):
+        rgb = np.asarray(image.convert("RGB"))
+        result = self._mesh.process(rgb)
+        if not result.multi_face_landmarks:
+            return None, 0.0
+        points = result.multi_face_landmarks[0].landmark
+        height, width = rgb.shape[:2]
+        xs = np.array([p.x * width for p in points], dtype=np.float32)
+        ys = np.array([p.y * height for p in points], dtype=np.float32)
+        x0, x1 = int(max(0, np.floor(xs.min()))), int(min(width, np.ceil(xs.max())))
+        y0, y1 = int(max(0, np.floor(ys.min()))), int(min(height, np.ceil(ys.max())))
+        # MediaPipe FaceMesh eye outer corners: 33 (subject's right), 263 (left).
+        right_eye, left_eye = points[33], points[263]
+        dx = (left_eye.x - right_eye.x) * width
+        dy = (left_eye.y - right_eye.y) * height
+        roll = float(np.degrees(np.arctan2(dy, dx)))
+        if x1 <= x0 or y1 <= y0:
+            return None, 0.0
+        return (x0, y0, x1 - x0, y1 - y0), roll
+
+    def close(self):
+        self._mesh.close()
+
+
+def straighten_roll(image, analyzer):
+    """Correct small/medium camera roll using the measured eye line only."""
+    face_box, roll = analyzer.analyze(image)
+    if face_box is None:
+        return image, None, 0.0
+    # Avoid rotating for sub-pixel noise. Clamp extreme rotations: a large angle
+    # usually indicates a genuinely turned/tilted pose that needs a retake.
+    applied = max(-12.0, min(12.0, roll)) if abs(roll) >= 0.7 else 0.0
+    if applied:
+        image = image.rotate(
+            applied, resample=Image.Resampling.BICUBIC, expand=False,
+            fillcolor=(255, 255, 255, 255)
+        )
+        face_box, _ = analyzer.analyze(image)
+    return image, face_box, applied
 
 
 def passport_crop(image, face_box=None):
-    """Create a 35:45 portrait crop while preserving the full head and more shoulders."""
+    """Frame a 35:45 portrait from facial landmarks, preserving hair and shoulders."""
     width, height = image.size
     if face_box:
         x, y, face_w, face_h = face_box
-
-        # Haar detects the central face, not the hairline. The previous 68% target
-        # made the crop far too short and pushed the top edge into the hair.
-        # Use a much wider vertical frame and estimate the top of the head above
-        # the detected face. Keep a small, deliberate margin above the hair.
-        crop_h = min(height, max(1, int(round(face_h / 0.43))))
+        # FaceMesh follows the face contour, not the hairstyle. Estimate hair above
+        # the forehead and reserve a small top margin. The face occupies ~56% of
+        # the frame height, producing a larger, more demo-like head-and-shoulders crop.
+        crop_h = min(height, max(1, int(round(face_h / 0.56))))
         crop_w = max(1, int(round(crop_h * RATIO)))
-
-        estimated_head_top = max(0.0, y - face_h * 0.38)
+        estimated_head_top = max(0.0, y - face_h * 0.27)
         top = int(round(estimated_head_top - crop_h * 0.035))
         center_x = x + face_w / 2.0
         left = int(round(center_x - crop_w / 2.0))
-
-        # Keep the crop inside the source whenever possible. If the source is
-        # shorter than the desired framing, the white padding below is used.
         if height >= crop_h:
             top = max(0, min(top, height - crop_h))
         if width >= crop_w:
             left = max(0, min(left, width - crop_w))
     else:
-        # Safe fallback for profiles, occluded faces, or difficult lighting.
         if width / height > RATIO:
-            crop_h = height
-            crop_w = int(round(height * RATIO))
+            crop_h, crop_w = height, int(round(height * RATIO))
         else:
-            crop_w = width
-            crop_h = int(round(width / RATIO))
-        left = (width - crop_w) // 2
-        top = (height - crop_h) // 2
-
-    # White padding avoids black/transparent borders if the ideal crop exceeds
-    # the original photograph; source pixels are never stretched to fill gaps.
+            crop_w, crop_h = width, int(round(width / RATIO))
+        left, top = (width - crop_w) // 2, (height - crop_h) // 2
     framed = Image.new("RGB", (crop_w, crop_h), (255, 255, 255))
     source_left, source_top = max(0, left), max(0, top)
     source_right, source_bottom = min(width, left + crop_w), min(height, top + crop_h)
@@ -120,34 +147,33 @@ def passport_crop(image, face_box=None):
         framed.paste(piece, (source_left - left, source_top - top))
     return framed
 
-
-def process_photo(source, destination, session):
+def process_photo(source, destination, session, face_analyzer):
     with Image.open(source) as opened:
         original = ImageOps.exif_transpose(opened).convert("RGBA")
-    face_box = detect_face_box(original)
+    original, face_box, roll = straighten_roll(original, face_analyzer)
     cutout = session.remove_background(original)
     background = Image.new("RGBA", cutout.size, (255, 255, 255, 255))
     background.alpha_composite(cutout)
     result = passport_crop(background.convert("RGB"), face_box)
-    # Render at the supplied demo's pixel dimensions instead of shrinking to 413 × 531.
     result = result.resize(OUTPUT_SIZE, Image.Resampling.LANCZOS)
-    # Restrained sharpening; no skin smoothing, facial reshaping, or clothing changes.
-    result = result.filter(ImageFilter.UnsharpMask(radius=1.0, percent=105, threshold=3))
+    result = result.filter(ImageFilter.UnsharpMask(radius=0.8, percent=85, threshold=4))
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
     if suffix in (".jpg", ".jpeg"):
         result.save(destination, "JPEG", quality=96, dpi=DPI, optimize=True)
     elif suffix == ".png":
-        result.save(destination, "PNG", dpi=(DPI, DPI), optimize=True)
+        result.save(destination, "PNG", dpi=DPI, optimize=True)
     elif suffix in (".tif", ".tiff"):
-        result.save(destination, "TIFF", dpi=(DPI, DPI), compression="tiff_lzw")
+        result.save(destination, "TIFF", dpi=DPI, compression="tiff_lzw")
     elif suffix == ".bmp":
-        result.save(destination, "BMP", dpi=(DPI, DPI))
+        result.save(destination, "BMP", dpi=DPI)
     elif suffix == ".webp":
         result.save(destination, "WEBP", quality=96, method=6)
     else:
         raise ValueError(f"Unsupported output format: {suffix}")
-    return "face-aligned" if face_box else "center-crop fallback"
+    if face_box is None:
+        return "face not detected — centered fallback; retake/review recommended"
+    return f"landmark aligned; roll corrected {roll:.1f}°"
 
 class Worker(QObject):
     progress = Signal(int, int, str)
@@ -162,11 +188,12 @@ class Worker(QObject):
             model = model_dir / "u2netp.onnx"
             if not model.exists(): raise RuntimeError("Offline AI model missing. Reinstall the application.")
             session = U2NetSession(model)
+            face_analyzer = FaceAnalyzer()
             ok = errors = 0
             for i, src in enumerate(self.files, 1):
                 try:
                     target = output_path_for(src, self.output)
-                    framing = process_photo(src, target, session); ok += 1
+                    framing = process_photo(src, target, session, face_analyzer); ok += 1
                     self.progress.emit(i, len(self.files), f"Saved ({framing}): {src.name} → {target.name}")
                 except Exception as exc:
                     errors += 1; self.progress.emit(i, len(self.files), f"FAILED: {src.name}: {exc}")
