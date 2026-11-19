@@ -115,39 +115,61 @@ def straighten_roll(image, analyzer):
     return image, face_box, applied
 
 
-def passport_crop(image, face_box=None):
-    """Frame a 35:45 portrait from facial landmarks, preserving hair and shoulders."""
-    width, height = image.size
-    if face_box:
-        x, y, face_w, face_h = face_box
-        # Wider calibrated crop to reduce the persistent over-zoom and show
-        # the full hairstyle, shoulders and upper chest like the demo reference.
-        # FaceMesh bounds the facial landmarks, not the hair or ears; use a
-        # deliberately wider crop window around that box.
-        target_face_width_ratio = 0.37
-        crop_w = max(1, int(round(face_w / target_face_width_ratio)))
-        crop_h = max(1, int(round(crop_w / RATIO)))
-        # Estimate the top of the hairstyle above the upper facial landmarks.
-        # Keep the crop origin outside the source when needed: passport_crop()
-        # pads those areas with pure white. Clamping to the source edge was
-        # cutting off hair at the top and shifting the subject upward.
-        estimated_head_top = y - face_h * 0.27
-        top = int(round(estimated_head_top - crop_h * 0.035))
-        center_x = x + face_w / 2.0
-        left = int(round(center_x - crop_w / 2.0))
-    else:
-        if width / height > RATIO:
-            crop_h, crop_w = height, int(round(height * RATIO))
+def passport_crop(subject_rgba, face_box=None):
+    """Fit the complete segmented person into a 35:45 white canvas.
+
+    Framing is based on the U2NET foreground silhouette (hair, ears and
+    shoulders), not a face-landmark rectangle. This avoids fixed face ratios,
+    source-edge clipping and oversized artificial padding bands.
+    """
+    rgba = subject_rgba.convert("RGBA")
+    alpha = rgba.getchannel("A")
+
+    # Ignore faint segmentation haze while retaining fine hair and clothing
+    # edges. A binary support mask is used only to locate the silhouette;
+    # the original soft alpha is retained for compositing.
+    support = alpha.point(lambda value: 255 if value >= 72 else 0)
+    bbox = support.getbbox()
+
+    if bbox is None:
+        # Defensive fallback for a failed/empty foreground mask.
+        rgb = Image.new("RGB", rgba.size, (255, 255, 255))
+        rgb.paste(rgba.convert("RGB"))
+        if rgb.width / rgb.height > RATIO:
+            crop_h, crop_w = rgb.height, int(round(rgb.height * RATIO))
         else:
-            crop_w, crop_h = width, int(round(width / RATIO))
-        left, top = (width - crop_w) // 2, (height - crop_h) // 2
-    framed = Image.new("RGB", (crop_w, crop_h), (255, 255, 255))
-    source_left, source_top = max(0, left), max(0, top)
-    source_right, source_bottom = min(width, left + crop_w), min(height, top + crop_h)
-    if source_right > source_left and source_bottom > source_top:
-        piece = image.crop((source_left, source_top, source_right, source_bottom))
-        framed.paste(piece, (source_left - left, source_top - top))
-    return framed
+            crop_w, crop_h = rgb.width, int(round(rgb.width / RATIO))
+        left = (rgb.width - crop_w) // 2
+        top = (rgb.height - crop_h) // 2
+        return rgb.crop((left, top, left + crop_w, top + crop_h))
+
+    subject = rgba.crop(bbox)
+    subject_w, subject_h = subject.size
+    canvas_w, canvas_h = OUTPUT_SIZE
+
+    # Match the demo-like studio composition: full hairstyle visible with a
+    # small top margin; shoulders remain broad; torso ends around 82% of the
+    # frame, leaving clean white space below instead of a clipped source edge.
+    target_w = int(round(canvas_w * 0.96))
+    target_h = int(round(canvas_h * 0.79))
+    scale = min(target_w / max(1, subject_w), target_h / max(1, subject_h))
+
+    fitted_w = max(1, int(round(subject_w * scale)))
+    fitted_h = max(1, int(round(subject_h * scale)))
+    subject = subject.resize((fitted_w, fitted_h), Image.Resampling.LANCZOS)
+
+    # Center horizontally and place the top of the detected hair silhouette
+    # at 3% of the final image height.
+    x = (canvas_w - fitted_w) // 2
+    y = int(round(canvas_h * 0.03))
+
+    # Never crop the person if the measured silhouette is unusually tall.
+    if y + fitted_h > canvas_h:
+        y = max(0, canvas_h - fitted_h)
+
+    canvas = Image.new("RGBA", OUTPUT_SIZE, (255, 255, 255, 255))
+    canvas.alpha_composite(subject, (x, y))
+    return canvas.convert("RGB")
 
 def process_photo(source, destination, session, face_analyzer):
     with Image.open(source) as opened:
@@ -164,10 +186,9 @@ def process_photo(source, destination, session, face_analyzer):
     subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(1.04)
     cutout = subject_rgb.convert("RGBA")
     cutout.putalpha(subject_alpha)
-    background = Image.new("RGBA", cutout.size, (255, 255, 255, 255))
-    background.alpha_composite(cutout)
-    result = passport_crop(background.convert("RGB"), face_box)
-    result = result.resize(OUTPUT_SIZE, Image.Resampling.LANCZOS)
+    # Frame from the complete foreground silhouette rather than face-only
+    # landmarks; this preserves hairstyle and shoulders consistently.
+    result = passport_crop(cutout)
     result = result.filter(ImageFilter.UnsharpMask(radius=0.8, percent=85, threshold=4))
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
