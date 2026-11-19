@@ -120,25 +120,21 @@ def passport_crop(image, face_box=None):
     width, height = image.size
     if face_box:
         x, y, face_w, face_h = face_box
-        # Calibrated against the user's paired 1103x1426 reference outputs.
-        # Haar face bounds measured 789 px wide in the over-zoomed result and
-        # 630 px in the desired demo (same horizontal centre). Increase the
-        # crop window by 789/630 ~= 1.252 so the processed face scales down to
-        # the demo's size. FaceMesh's landmark box is narrower than Haar's
-        # visible face box, so the calibrated target ratio is 0.455, not 0.57.
-        target_face_width_ratio = 0.455
+        # Wider calibrated crop to reduce the persistent over-zoom and show
+        # the full hairstyle, shoulders and upper chest like the demo reference.
+        # FaceMesh bounds the facial landmarks, not the hair or ears; use a
+        # deliberately wider crop window around that box.
+        target_face_width_ratio = 0.37
         crop_w = max(1, int(round(face_w / target_face_width_ratio)))
         crop_h = max(1, int(round(crop_w / RATIO)))
-        # Move the crop window slightly upward so the head sits lower in the
-        # final image, matching the demo's top-of-head position.
-        estimated_head_top = max(0.0, y - face_h * 0.27)
-        top = int(round(estimated_head_top - crop_h * 0.063))
+        # Estimate the top of the hairstyle above the upper facial landmarks.
+        # Keep the crop origin outside the source when needed: passport_crop()
+        # pads those areas with pure white. Clamping to the source edge was
+        # cutting off hair at the top and shifting the subject upward.
+        estimated_head_top = y - face_h * 0.27
+        top = int(round(estimated_head_top - crop_h * 0.035))
         center_x = x + face_w / 2.0
         left = int(round(center_x - crop_w / 2.0))
-        if height >= crop_h:
-            top = max(0, min(top, height - crop_h))
-        if width >= crop_w:
-            left = max(0, min(left, width - crop_w))
     else:
         if width / height > RATIO:
             crop_h, crop_w = height, int(round(height * RATIO))
