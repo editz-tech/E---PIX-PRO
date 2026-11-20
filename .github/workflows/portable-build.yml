@@ -38,7 +38,7 @@ jobs:
         run: |
           $app = "dist\E-PIX PRO"
           $exe = Join-Path $app "E-PIX PRO.exe"
-          $model = Join-Path $app "models\u2net.onnx"
+          $model = Join-Path $app "_internal\models\u2net.onnx"
           if (-not (Test-Path $exe)) { throw "Portable executable missing: $exe" }
           if (-not (Test-Path $model)) { throw "Bundled offline AI model missing from PyInstaller _internal data folder: $model" }
           if ((Get-Item $model).Length -lt 50000000) { throw "Bundled AI model is unexpectedly small." }
