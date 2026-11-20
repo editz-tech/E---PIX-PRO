@@ -143,11 +143,14 @@ def passport_crop(subject_rgba, face_box=None):
         fh = max(1.0, float(fh))
         face_cx = float(fx) + float(fw) / 2.0
 
-        # Demo-like head scale: face occupies about 62% of portrait height.
-        crop_h = fh / 0.62
+        # Match the supplied demo: keep the head noticeably smaller in the
+        # frame and retain generous space for the shoulders/upper torso.
+        # The face landmark box should occupy about 54% of output height.
+        crop_h = fh / 0.54
         crop_w = crop_h * target_ratio
         left = face_cx - crop_w / 2.0
-        top = float(fy) - 0.32 * fh
+        # Start higher than the previous tight crop so hair is not clipped.
+        top = float(fy) - 0.40 * fh
         crop_box = (
             int(round(left)), int(round(top)),
             int(round(left + crop_w)), int(round(top + crop_h))
