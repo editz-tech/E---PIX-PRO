@@ -1,0 +1,59 @@
+name: Build E-PIX PRO Portable ZIP
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/demo-matched-face-framing
+
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+
+      - name: Install application dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Download and verify offline AI model
+        run: python scripts/download_model.py
+
+      - name: Build portable application folder
+        run: pyinstaller --noconfirm --clean "E-Pix.spec"
+
+      - name: Verify portable application contents
+        shell: pwsh
+        run: |
+          $app = "dist\E-PIX PRO"
+          $exe = Join-Path $app "E-PIX PRO.exe"
+          $model = Join-Path $app "models\u2net.onnx"
+          if (-not (Test-Path $exe)) { throw "Portable executable missing: $exe" }
+          if (-not (Test-Path $model)) { throw "Bundled offline AI model missing: $model" }
+          if ((Get-Item $model).Length -lt 50000000) { throw "Bundled AI model is unexpectedly small." }
+          Get-ChildItem $app -Recurse | Select-Object FullName, Length
+
+      - name: Package portable ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist\E-PIX PRO\*" -DestinationPath "E-PIX-PRO-Portable.zip" -CompressionLevel Optimal
+          if (-not (Test-Path "E-PIX-PRO-Portable.zip")) { throw "Portable ZIP was not created." }
+          if ((Get-Item "E-PIX-PRO-Portable.zip").Length -lt 10000000) { throw "Portable ZIP is unexpectedly small." }
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: E-PIX-PRO-Portable
+          path: E-PIX-PRO-Portable.zip
+          if-no-files-found: error
