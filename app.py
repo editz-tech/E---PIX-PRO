@@ -150,14 +150,15 @@ def process_photo(source, destination, session, face_analyzer):
         original = ImageOps.exif_transpose(opened).convert("RGBA")
     original, face_box, roll = straighten_roll(original, face_analyzer)
     cutout = session.remove_background(original)
-    # Gentle exposure/contrast correction on the person only. This brightens
-    # underexposed source photos toward the demo's clearer studio look while
-    # keeping natural skin texture and clothing hue intact. No skin smoothing,
-    # saturation boost, facial reshaping or clothing recolouring is applied.
+    # Keep exposure neutral: the previous +8% brightness lifted already-bright
+    # skin highlights and washed out facial detail on flash-lit camera photos.
+    # Apply only moderate contrast and colour recovery to retain natural skin
+    # texture while bringing back the richer tones of the studio reference.
     subject_alpha = cutout.getchannel("A")
     subject_rgb = cutout.convert("RGB")
-    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.08)
-    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(1.04)
+    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.00)
+    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(1.07)
+    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(1.08)
     cutout = subject_rgb.convert("RGBA")
     cutout.putalpha(subject_alpha)
     # Frame from the complete foreground silhouette rather than face-only
