@@ -107,8 +107,11 @@ def straighten_roll(image, analyzer):
     # usually indicates a genuinely turned/tilted pose that needs a retake.
     applied = max(-12.0, min(12.0, roll)) if abs(roll) >= 0.7 else 0.0
     if applied:
+        # Expand the canvas during rotation. With expand=False, the rotated
+        # portrait leaves triangular white wedges inside the original frame;
+        # those wedges survive background removal and appear in the final ID photo.
         image = image.rotate(
-            applied, resample=Image.Resampling.BICUBIC, expand=False,
+            applied, resample=Image.Resampling.BICUBIC, expand=True,
             fillcolor=(255, 255, 255, 255)
         )
         face_box, _ = analyzer.analyze(image)
@@ -116,12 +119,11 @@ def straighten_roll(image, analyzer):
 
 
 def passport_crop(subject_rgba, face_box=None):
-    """Preserve the camera's original portrait framing and replace only its background.
+    """Create an upright 35:45 portrait, centring the crop on detected face.
 
-    Do not scale the person from the segmented alpha bounding box: that makes
-    the subject artificially small and creates a large empty band below.
-    Instead, crop the source frame to the required 35:45 ratio (top-anchored
-    when vertical trimming is unavoidable), then resize the whole frame.
+    The face box is used only for horizontal composition; the full portrait
+    height remains top-anchored so the hairstyle is not clipped. If detection
+    fails, fall back to the image centre.
     """
     rgba = subject_rgba.convert("RGBA")
     src_w, src_h = rgba.size
@@ -129,14 +131,16 @@ def passport_crop(subject_rgba, face_box=None):
     source_ratio = src_w / max(1, src_h)
 
     if source_ratio > target_ratio:
-        # Source is too wide: trim equal amounts from left and right, keeping
-        # the original head height and vertical placement untouched.
         crop_w = max(1, int(round(src_h * target_ratio)))
-        left = max(0, (src_w - crop_w) // 2)
+        if face_box:
+            fx, fy, fw, fh = face_box
+            face_cx = fx + fw / 2.0
+            left = int(round(face_cx - crop_w / 2.0))
+            left = max(0, min(src_w - crop_w, left))
+        else:
+            left = max(0, (src_w - crop_w) // 2)
         rgba = rgba.crop((left, 0, left + crop_w, src_h))
     elif source_ratio < target_ratio:
-        # Source is too tall/narrow: anchor at the top to protect hairstyle
-        # and trim only the lower edge rather than cutting into the hair.
         crop_h = max(1, int(round(src_w / target_ratio)))
         rgba = rgba.crop((0, 0, src_w, min(src_h, crop_h)))
 
@@ -150,20 +154,18 @@ def process_photo(source, destination, session, face_analyzer):
         original = ImageOps.exif_transpose(opened).convert("RGBA")
     original, face_box, roll = straighten_roll(original, face_analyzer)
     cutout = session.remove_background(original)
-    # Keep exposure neutral: the previous +8% brightness lifted already-bright
-    # skin highlights and washed out facial detail on flash-lit camera photos.
-    # Apply only moderate contrast and colour recovery to retain natural skin
-    # texture while bringing back the richer tones of the studio reference.
+    # Keep colour neutral. The earlier saturation boost made skin too orange
+    # compared with the approved demo. Use restrained contrast only; do not
+    # globally brighten or recolour the subject.
     subject_alpha = cutout.getchannel("A")
     subject_rgb = cutout.convert("RGB")
     subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.00)
-    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(1.07)
-    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(1.08)
+    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(1.03)
+    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(1.00)
     cutout = subject_rgb.convert("RGBA")
     cutout.putalpha(subject_alpha)
-    # Frame from the complete foreground silhouette rather than face-only
-    # landmarks; this preserves hairstyle and shoulders consistently.
-    result = passport_crop(cutout)
+    # Use the post-straightening face position to centre the final portrait.
+    result = passport_crop(cutout, face_box)
     result = result.filter(ImageFilter.UnsharpMask(radius=0.8, percent=85, threshold=4))
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
