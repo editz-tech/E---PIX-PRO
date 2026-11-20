@@ -4,7 +4,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import onnxruntime as ort
-from PIL import Image, ImageOps, ImageFilter, ImageEnhance
+from PIL import Image, ImageOps, ImageFilter, ImageEnhance, ImageChops
 from PySide6.QtCore import QObject, Signal, QThread
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox)
 
@@ -48,6 +48,13 @@ class U2NetSession:
         mask_image = Image.fromarray(np.uint8(mask * 255), mode="L")
         mask_image = mask_image.resize(rgb.size, Image.Resampling.LANCZOS)
         mask_image = mask_image.filter(ImageFilter.GaussianBlur(radius=0.25))
+
+        # Preserve transparent pixels introduced by expand=True rotation.
+        # The RGB inference input cannot represent transparency, so explicitly
+        # intersect the AI mask with the rotated source-image validity alpha.
+        source_alpha = image.convert("RGBA").getchannel("A")
+        mask_image = ImageChops.multiply(mask_image, source_alpha)
+
         rgba = rgb.convert("RGBA")
         rgba.putalpha(mask_image)
         return rgba
@@ -112,37 +119,51 @@ def straighten_roll(image, analyzer):
         # those wedges survive background removal and appear in the final ID photo.
         image = image.rotate(
             applied, resample=Image.Resampling.BICUBIC, expand=True,
-            fillcolor=(255, 255, 255, 255)
+            fillcolor=(0, 0, 0, 0)
         )
         face_box, _ = analyzer.analyze(image)
     return image, face_box, applied
 
 
 def passport_crop(subject_rgba, face_box=None):
-    """Create an upright 35:45 portrait, centring the crop on detected face.
+    """Build a face-scaled 35:45 ID portrait with safe, level edges.
 
-    The face box is used only for horizontal composition; the full portrait
-    height remains top-anchored so the hairstyle is not clipped. If detection
-    fails, fall back to the image centre.
+    A fixed full-frame resize makes faces too small when the camera framing
+    differs. When landmarks are available, derive the crop from face height,
+    leave room above the forehead for hair and below the chin for shoulders,
+    and centre horizontally on the face. Out-of-frame crop areas stay
+    transparent and are composited as pure white, never as rotated wedges.
     """
     rgba = subject_rgba.convert("RGBA")
     src_w, src_h = rgba.size
     target_ratio = RATIO
-    source_ratio = src_w / max(1, src_h)
 
-    if source_ratio > target_ratio:
-        crop_w = max(1, int(round(src_h * target_ratio)))
-        if face_box:
-            fx, fy, fw, fh = face_box
-            face_cx = fx + fw / 2.0
-            left = int(round(face_cx - crop_w / 2.0))
-            left = max(0, min(src_w - crop_w, left))
-        else:
-            left = max(0, (src_w - crop_w) // 2)
-        rgba = rgba.crop((left, 0, left + crop_w, src_h))
-    elif source_ratio < target_ratio:
-        crop_h = max(1, int(round(src_w / target_ratio)))
-        rgba = rgba.crop((0, 0, src_w, min(src_h, crop_h)))
+    if face_box:
+        fx, fy, fw, fh = face_box
+        fh = max(1.0, float(fh))
+        face_cx = float(fx) + float(fw) / 2.0
+
+        # Demo-like head scale: face occupies about 62% of portrait height.
+        crop_h = fh / 0.62
+        crop_w = crop_h * target_ratio
+        left = face_cx - crop_w / 2.0
+        top = float(fy) - 0.32 * fh
+        crop_box = (
+            int(round(left)), int(round(top)),
+            int(round(left + crop_w)), int(round(top + crop_h))
+        )
+        rgba = rgba.crop(crop_box)
+    else:
+        # Safe fallback when landmarks cannot be detected: centre a ratio crop.
+        source_ratio = src_w / max(1, src_h)
+        if source_ratio > target_ratio:
+            crop_w = max(1, int(round(src_h * target_ratio)))
+            left = (src_w - crop_w) // 2
+            rgba = rgba.crop((left, 0, left + crop_w, src_h))
+        elif source_ratio < target_ratio:
+            crop_h = max(1, int(round(src_w / target_ratio)))
+            top = max(0, (src_h - crop_h) // 2)
+            rgba = rgba.crop((0, top, src_w, top + crop_h))
 
     rgba = rgba.resize(OUTPUT_SIZE, Image.Resampling.LANCZOS)
     canvas = Image.new("RGBA", OUTPUT_SIZE, (255, 255, 255, 255))
