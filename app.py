@@ -116,28 +116,56 @@ def straighten_roll(image, analyzer):
 
 
 def passport_crop(subject_rgba, face_box=None):
-    """Preserve the camera's original portrait framing and replace only its background.
+    """Create a face-aware 35:45 crop matching the supplied studio-demo framing.
 
-    Do not scale the person from the segmented alpha bounding box: that makes
-    the subject artificially small and creates a large empty band below.
-    Instead, crop the source frame to the required 35:45 ratio (top-anchored
-    when vertical trimming is unavoidable), then resize the whole frame.
+    The previous implementation ignored face_box and resized a centre crop of
+    the entire camera frame. Consequently, face size and centring varied with
+    the photographer's distance and source framing. When landmarks are
+    available, use face width to set a consistent head scale, centre the crop
+    on the detected face, and use the segmented silhouette to retain the real
+    hairline with controlled headroom. No facial geometry is warped.
     """
     rgba = subject_rgba.convert("RGBA")
     src_w, src_h = rgba.size
-    target_ratio = RATIO
-    source_ratio = src_w / max(1, src_h)
 
-    if source_ratio > target_ratio:
-        # Source is too wide: trim equal amounts from left and right, keeping
-        # the original head height and vertical placement untouched.
-        crop_w = max(1, int(round(src_h * target_ratio)))
+    if face_box is not None:
+        fx, fy, fw, fh = face_box
+        if fw > 0 and fh > 0:
+            # Demo framing: face occupies about 52% of output width. This
+            # produces a consistent head size across photos taken at
+            # different distances without stretching or reshaping the face.
+            crop_w = max(1, int(round(fw / 0.52)))
+            crop_h = max(1, int(round(crop_w / RATIO)))
+
+            # Find the true top of the segmented subject so hair is included.
+            # Ignore very faint mask residue around the silhouette.
+            alpha = rgba.getchannel("A")
+            silhouette = alpha.point(lambda value: 255 if value >= 24 else 0)
+            bounds = silhouette.getbbox()
+            if bounds:
+                subject_top = bounds[1]
+            else:
+                subject_top = max(0, fy)
+
+            # Keep a consistent 5.5% top margin above the hair, like the
+            # reference demo, while centring horizontally on the face.
+            top = int(round(subject_top - crop_h * 0.055))
+            left = int(round(fx + fw / 2.0 - crop_w / 2.0))
+            crop = rgba.crop((left, top, left + crop_w, top + crop_h))
+            crop = crop.resize(OUTPUT_SIZE, Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", OUTPUT_SIZE, (255, 255, 255, 255))
+            canvas.alpha_composite(crop, (0, 0))
+            return canvas.convert("RGB")
+
+    # Safe fallback when no face is detected: preserve the original
+    # top-anchored 35:45 crop rather than inventing facial alignment.
+    source_ratio = src_w / max(1, src_h)
+    if source_ratio > RATIO:
+        crop_w = max(1, int(round(src_h * RATIO)))
         left = max(0, (src_w - crop_w) // 2)
         rgba = rgba.crop((left, 0, left + crop_w, src_h))
-    elif source_ratio < target_ratio:
-        # Source is too tall/narrow: anchor at the top to protect hairstyle
-        # and trim only the lower edge rather than cutting into the hair.
-        crop_h = max(1, int(round(src_w / target_ratio)))
+    elif source_ratio < RATIO:
+        crop_h = max(1, int(round(src_w / RATIO)))
         rgba = rgba.crop((0, 0, src_w, min(src_h, crop_h)))
 
     rgba = rgba.resize(OUTPUT_SIZE, Image.Resampling.LANCZOS)
