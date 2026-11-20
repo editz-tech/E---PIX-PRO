@@ -190,7 +190,7 @@ def process_photo(source, destination, session, face_analyzer):
     cutout.putalpha(subject_alpha)
     # Frame from the complete foreground silhouette rather than face-only
     # landmarks; this preserves hairstyle and shoulders consistently.
-    result = passport_crop(cutout)
+    result = passport_crop(cutout, face_box=face_box)
     result = result.filter(ImageFilter.UnsharpMask(radius=0.8, percent=85, threshold=4))
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
