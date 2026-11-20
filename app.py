@@ -131,10 +131,10 @@ def passport_crop(subject_rgba, face_box=None):
     if face_box is not None:
         fx, fy, fw, fh = face_box
         if fw > 0 and fh > 0:
-            # Demo framing: face occupies about 52% of output width. This
-            # produces a consistent head size across photos taken at
-            # different distances without stretching or reshaping the face.
-            crop_w = max(1, int(round(fw / 0.52)))
+            # Reference-demo framing: use a wider crop so the head is about 10-12%
+            # smaller than the previous build, with more balanced shoulders.
+            # No facial geometry is warped or resized independently.
+            crop_w = max(1, int(round(fw / 0.46)))
             crop_h = max(1, int(round(crop_w / RATIO)))
 
             # Find the true top of the segmented subject so hair is included.
@@ -147,9 +147,8 @@ def passport_crop(subject_rgba, face_box=None):
             else:
                 subject_top = max(0, fy)
 
-            # Keep a consistent 5.5% top margin above the hair, like the
-            # reference demo, while centring horizontally on the face.
-            top = int(round(subject_top - crop_h * 0.055))
+            # Keep a small, consistent headroom above the detected hair silhouette.
+            top = int(round(subject_top - crop_h * 0.05))
             left = int(round(fx + fw / 2.0 - crop_w / 2.0))
             crop = rgba.crop((left, top, left + crop_w, top + crop_h))
             crop = crop.resize(OUTPUT_SIZE, Image.Resampling.LANCZOS)
@@ -178,14 +177,32 @@ def process_photo(source, destination, session, face_analyzer):
         original = ImageOps.exif_transpose(opened).convert("RGBA")
     original, face_box, roll = straighten_roll(original, face_analyzer)
     cutout = session.remove_background(original)
-    # Gentle exposure/contrast correction on the person only. This brightens
-    # underexposed source photos toward the demo's clearer studio look while
-    # keeping natural skin texture and clothing hue intact. No skin smoothing,
-    # saturation boost, facial reshaping or clothing recolouring is applied.
+    # Adaptive midtone lift to bring underexposed foregrounds closer to the
+    # supplied demo without washing out highlights or changing colour balance.
+    # Estimate exposure from confident foreground pixels in the detected face.
     subject_alpha = cutout.getchannel("A")
     subject_rgb = cutout.convert("RGB")
-    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.08)
-    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(1.04)
+    exposure_region = face_box if face_box is not None else (0, 0, *subject_rgb.size)
+    fx, fy, fw, fh = exposure_region
+    fx0, fy0 = max(0, int(fx)), max(0, int(fy))
+    fx1, fy1 = min(subject_rgb.width, int(fx + fw)), min(subject_rgb.height, int(fy + fh))
+    if fx1 > fx0 and fy1 > fy0:
+        rgb_array = np.asarray(subject_rgb, dtype=np.uint8)
+        alpha_array = np.asarray(subject_alpha, dtype=np.uint8)
+        face_pixels = rgb_array[fy0:fy1, fx0:fx1]
+        face_mask = alpha_array[fy0:fy1, fx0:fx1] >= 200
+        if np.any(face_mask):
+            luminance = (0.2126 * face_pixels[..., 0] +
+                         0.7152 * face_pixels[..., 1] +
+                         0.0722 * face_pixels[..., 2])
+            median_luma = float(np.median(luminance[face_mask]))
+            normalized = max(0.05, min(0.95, median_luma / 255.0))
+            # Demo face midtones are around 0.62 luminance. Limit correction
+            # so already-bright images are not aggressively darkened.
+            gamma = max(0.72, min(1.08, np.log(0.62) / np.log(normalized)))
+            lut = [int(round(255.0 * ((value / 255.0) ** gamma)))
+                   for value in range(256)]
+            subject_rgb = subject_rgb.point(lut * 3)
     cutout = subject_rgb.convert("RGBA")
     cutout.putalpha(subject_alpha)
     # Frame from the complete foreground silhouette rather than face-only
