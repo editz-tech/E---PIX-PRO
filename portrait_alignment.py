@@ -161,4 +161,9 @@ def straighten_portrait(image: Image.Image, analyzer):
         face_box, _, _ = analyzer.analyze(image)
 
     face_box, _, _ = analyzer.analyze(image)
+    final_points = _shoulder_points(analyzer, image)
+    if final_points is not None:
+        final_shoulder_angle = _normalized_line_angle(*final_points)
+    else:
+        final_shoulder_angle = None
     return image, face_box, applied_roll, final_shoulder_angle
