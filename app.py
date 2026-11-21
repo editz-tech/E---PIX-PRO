@@ -70,58 +70,70 @@ def output_path_for(source, output_dir):
     return target
 
 class FaceAnalyzer:
-    """MediaPipe facial landmarks for eye-line roll correction and face framing.
-
-    Only in-plane roll is corrected. Yaw/pitch are never synthesized or warped.
-    """
+    """Face framing plus shoulder-line detection for level ID portraits."""
     def __init__(self):
         import mediapipe as mp
         self._mesh = mp.solutions.face_mesh.FaceMesh(
             static_image_mode=True, max_num_faces=1, refine_landmarks=True,
             min_detection_confidence=0.60
         )
+        self._pose = mp.solutions.pose.Pose(
+            static_image_mode=True, model_complexity=1,
+            enable_segmentation=False, min_detection_confidence=0.55
+        )
 
     def analyze(self, image):
         rgb = np.asarray(image.convert("RGB"))
-        result = self._mesh.process(rgb)
-        if not result.multi_face_landmarks:
-            return None, 0.0
-        points = result.multi_face_landmarks[0].landmark
         height, width = rgb.shape[:2]
-        xs = np.array([p.x * width for p in points], dtype=np.float32)
-        ys = np.array([p.y * height for p in points], dtype=np.float32)
-        x0, x1 = int(max(0, np.floor(xs.min()))), int(min(width, np.ceil(xs.max())))
-        y0, y1 = int(max(0, np.floor(ys.min()))), int(min(height, np.ceil(ys.max())))
-        # MediaPipe FaceMesh eye outer corners: 33 (subject's right), 263 (left).
-        right_eye, left_eye = points[33], points[263]
-        dx = (left_eye.x - right_eye.x) * width
-        dy = (left_eye.y - right_eye.y) * height
-        roll = float(np.degrees(np.arctan2(dy, dx)))
-        if x1 <= x0 or y1 <= y0:
-            return None, 0.0
-        return (x0, y0, x1 - x0, y1 - y0), roll
+        face_box, face_roll = None, 0.0
+        face_result = self._mesh.process(rgb)
+        if face_result.multi_face_landmarks:
+            points = face_result.multi_face_landmarks[0].landmark
+            xs = np.array([p.x * width for p in points], dtype=np.float32)
+            ys = np.array([p.y * height for p in points], dtype=np.float32)
+            x0, x1 = int(max(0, np.floor(xs.min()))), int(min(width, np.ceil(xs.max())))
+            y0, y1 = int(max(0, np.floor(ys.min()))), int(min(height, np.ceil(ys.max())))
+            # FaceMesh eye outer corners: 33 and 263.
+            right_eye, left_eye = points[33], points[263]
+            dx = (left_eye.x - right_eye.x) * width
+            dy = (left_eye.y - right_eye.y) * height
+            face_roll = float(np.degrees(np.arctan2(dy, dx)))
+            if x1 > x0 and y1 > y0:
+                face_box = (x0, y0, x1 - x0, y1 - y0)
+
+        # Pose shoulder landmarks (11 and 12) give the body line. Use this
+        # instead of assuming the eye line and shoulders have the same angle.
+        shoulder_roll = None
+        pose_result = self._pose.process(rgb)
+        if pose_result.pose_landmarks:
+            lm = pose_result.pose_landmarks.landmark
+            left_shoulder, right_shoulder = lm[11], lm[12]
+            if min(left_shoulder.visibility, right_shoulder.visibility) >= 0.45:
+                dx = (right_shoulder.x - left_shoulder.x) * width
+                dy = (right_shoulder.y - left_shoulder.y) * height
+                angle = float(np.degrees(np.arctan2(dy, dx)))
+                # Normalize the line direction to the horizontal range.
+                shoulder_roll = ((angle + 90.0) % 180.0) - 90.0
+        return face_box, face_roll, shoulder_roll
 
     def close(self):
         self._mesh.close()
+        self._pose.close()
 
 
 def straighten_roll(image, analyzer):
-    """Correct small/medium camera roll using the measured eye line only."""
-    face_box, roll = analyzer.analyze(image)
-    if face_box is None:
-        return image, None, 0.0
-    # Avoid rotating for sub-pixel noise. Clamp extreme rotations: a large angle
-    # usually indicates a genuinely turned/tilted pose that needs a retake.
-    applied = max(-12.0, min(12.0, roll)) if abs(roll) >= 0.7 else 0.0
+    """Level the shoulder line; fall back to eye-line roll if shoulders are hidden."""
+    face_box, face_roll, shoulder_roll = analyzer.analyze(image)
+    roll = shoulder_roll if shoulder_roll is not None else face_roll
+    # Do not over-correct genuine body posture. A small shoulder tilt is corrected
+    # automatically; larger angles are limited and should be reviewed.
+    applied = max(-8.0, min(8.0, roll)) if abs(roll) >= 0.7 else 0.0
     if applied:
-        # Expand the canvas during rotation. With expand=False, the rotated
-        # portrait leaves triangular white wedges inside the original frame;
-        # those wedges survive background removal and appear in the final ID photo.
         image = image.rotate(
             applied, resample=Image.Resampling.BICUBIC, expand=True,
             fillcolor=(0, 0, 0, 0)
         )
-        face_box, _ = analyzer.analyze(image)
+        face_box, _, _ = analyzer.analyze(image)
     return image, face_box, applied
 
 
@@ -145,7 +157,7 @@ def passport_crop(subject_rgba, face_box=None):
 
         # Match the approved demo framing: include more hair, both sides of
         # the head, shoulders and upper chest. Target a smaller face at 45%.
-        FACE_HEIGHT_TARGET = 0.45
+        FACE_HEIGHT_TARGET = 0.42
         TOP_WHITE_MARGIN = 0.022
         crop_h = fh / FACE_HEIGHT_TARGET
         crop_w = crop_h * target_ratio
