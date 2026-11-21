@@ -301,7 +301,7 @@ def process_photo(source, destination, session, face_analyzer):
         raise ValueError(f"Unsupported output format: {suffix}")
     if face_box is None:
         return "face not detected — no geometric correction; manual review required"
-    return f"face pixels preserved; roll corrected {roll:.1f}°; torso/shoulders levelled where detected"
+    return f"face not regenerated; rigid roll corrected {roll:.1f}°; torso/shoulders levelled where detected"
 
 class Worker(QObject):
     progress = Signal(int, int, str)
