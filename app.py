@@ -128,19 +128,17 @@ class FaceAnalyzer:
 
 
 def straighten_roll(image, analyzer):
-    """Level the head from the eye line, then gently level the torso below the jaw.
+    """Correct modest head roll and independently level/centre the torso.
 
-    The facial region is never locally warped or regenerated. A single small
-    rigid rotation may be applied to the complete source frame to correct roll;
-    the subsequent shoulder correction is restricted to the neck/torso region.
+    The face is not locally warped or regenerated. Head roll uses one small
+    rigid image rotation; the body correction is a smooth remap beginning
+    below the detected face box. Shoulder landmarks are sorted by image x
+    so mirrored/anatomical left-right conventions cannot invert the result.
     """
     face_box, face_roll, _ = analyzer.analyze(image)
     if face_box is None:
-        # Without reliable face landmarks, do not guess a head correction.
         return image, None, 0.0
 
-    # Correct only in-plane roll. Yaw/pitch cannot be made frontal without
-    # synthesizing facial pixels, which this identity-preserving mode forbids.
     applied = max(-8.0, min(8.0, face_roll)) if abs(face_roll) >= 0.5 else 0.0
     if applied:
         arr = np.asarray(image.convert("RGBA"))
@@ -161,51 +159,70 @@ def straighten_roll(image, analyzer):
         if face_box is None:
             return image, None, applied
 
-    # Detect shoulders again after head-roll correction. Sort by image x so
-    # the calculation is independent of MediaPipe's anatomical left/right
-    # naming convention (which can be reversed in a front-facing photo).
     pose = analyzer._pose.process(np.asarray(image.convert("RGB")))
-    if pose.pose_landmarks:
-        lm = pose.pose_landmarks.landmark
-        shoulders = [lm[11], lm[12]]
-        if min(p.visibility for p in shoulders) >= 0.60:
-            shoulders.sort(key=lambda p: p.x)
-            left, right = shoulders
-            h, w = image.height, image.width
-            x1, y1 = left.x * w, left.y * h
-            x2, y2 = right.x * w, right.y * h
-            dx = x2 - x1
-            if dx > max(20.0, w * 0.08):
-                angle = float(np.degrees(np.arctan2(y2 - y1, dx)))
-                # Avoid extreme perspective correction on a genuinely
-                # asymmetric pose. This corrects mild camera/body roll only.
-                correction = max(-6.0, min(6.0, angle))
-                if abs(correction) >= 0.7:
-                    slope = float(np.tan(np.radians(correction)))
-                    center_x = (x1 + x2) / 2.0
-                    shoulder_y = (y1 + y2) / 2.0
-                    face_bottom = float(face_box[1] + face_box[3])
-                    face_h = max(1.0, float(face_box[3]))
-                    start_y = min(float(h - 2), face_bottom + 0.035 * face_h)
-                    end_y = max(start_y + 1.0, min(float(h - 1), shoulder_y))
-                    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-                    t = np.clip((yy - start_y) / (end_y - start_y), 0.0, 1.0)
-                    blend = t * t * (3.0 - 2.0 * t)
-                    # Inverse-map the lower torso so both shoulder landmarks
-                    # land on one horizontal line. The face/hair pixels above
-                    # start_y have blend=0 and are not locally transformed.
-                    map_x = xx
-                    map_y = yy + (slope * (xx - center_x) * blend).astype(np.float32)
-                    source = np.asarray(image.convert("RGBA"))
-                    corrected = cv2.remap(
-                        source, map_x, map_y, interpolation=cv2.INTER_CUBIC,
-                        borderMode=cv2.BORDER_REPLICATE
-                    )
-                    image = Image.fromarray(corrected, mode="RGBA")
+    if not pose.pose_landmarks:
+        face_box, _, _ = analyzer.analyze(image)
+        return image, face_box, applied
 
+    landmarks = pose.pose_landmarks.landmark
+    shoulders = [landmarks[11], landmarks[12]]
+    if min(p.visibility for p in shoulders) < 0.60:
+        face_box, _, _ = analyzer.analyze(image)
+        return image, face_box, applied
+
+    shoulders.sort(key=lambda p: p.x)
+    left, right = shoulders
+    h, w = image.height, image.width
+    x1, y1 = left.x * w, left.y * h
+    x2, y2 = right.x * w, right.y * h
+    dx = x2 - x1
+    if dx <= max(20.0, w * 0.08):
+        face_box, _, _ = analyzer.analyze(image)
+        return image, face_box, applied
+
+    # Use the actual shoulder line, not a fixed 6-degree cap. The 12-degree
+    # safety bound still prevents aggressive warping when a subject is turned
+    # or the pose estimator returns an unreliable perspective estimate.
+    shoulder_angle = float(np.degrees(np.arctan2(y2 - y1, dx)))
+    correction = max(-12.0, min(12.0, shoulder_angle))
+    face_x, face_y, face_w, face_h = face_box
+    face_cx = float(face_x) + float(face_w) / 2.0
+    shoulder_cx = (x1 + x2) / 2.0
+
+    # Move the torso centre under the face as well as levelling the shoulder
+    # line. Bound translation to avoid forcing a strongly turned body into a
+    # visibly distorted shape.
+    horizontal_shift = face_cx - shoulder_cx
+    max_shift = max(1.0, float(face_w) * 0.18)
+    horizontal_shift = max(-max_shift, min(max_shift, horizontal_shift))
+
+    if abs(correction) < 0.45 and abs(horizontal_shift) < max(1.0, face_w * 0.015):
+        face_box, _, _ = analyzer.analyze(image)
+        return image, face_box, applied
+
+    start_y = min(float(h - 2), float(face_y + face_h) + 0.035 * max(1.0, float(face_h)))
+    shoulder_y = (y1 + y2) / 2.0
+    end_y = min(float(h - 1), max(start_y + 2.0, shoulder_y))
+    if end_y <= start_y + 1.0:
+        face_box, _, _ = analyzer.analyze(image)
+        return image, face_box, applied
+
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    t = np.clip((yy - start_y) / (end_y - start_y), 0.0, 1.0)
+    blend = t * t * (3.0 - 2.0 * t)
+    # Inverse mapping: source shoulder points are moved to a common y level
+    # and the torso midpoint is translated towards the face centre.
+    source_x = xx - (horizontal_shift * blend).astype(np.float32)
+    slope = float(np.tan(np.radians(correction)))
+    source_y = yy + (slope * (source_x - shoulder_cx) * blend).astype(np.float32)
+    source = np.asarray(image.convert("RGBA"))
+    corrected = cv2.remap(
+        source, source_x, source_y, interpolation=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE
+    )
+    image = Image.fromarray(corrected, mode="RGBA")
     face_box, _, _ = analyzer.analyze(image)
     return image, face_box, applied
-
 
 def passport_crop(subject_rgba, face_box=None):
     """Build a face-scaled 35:45 ID portrait with safe, level edges.
