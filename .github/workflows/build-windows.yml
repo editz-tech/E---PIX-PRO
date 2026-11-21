@@ -1,48 +1,94 @@
 name: Build E-PIX PRO Windows installer
+
 on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths:
+      - "app.py"
+      - "ai_portrait.py"
+      - "E-Pix.spec"
+      - "requirements.txt"
+      - "scripts/**"
+      - "models/**"
+      - "README.md"
+      - ".github/workflows/build-windows.yml"
+
 permissions:
   contents: read
+
 jobs:
-  build:
+  installer:
     runs-on: windows-2022
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           architecture: x64
+
       - name: Install Inno Setup
-        run: choco install innosetup --yes --no-progress
-      - name: Install dependencies
+        shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          choco install innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup installation failed." }
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed." }
           pip install -r requirements.txt pyinstaller
+          if ($LASTEXITCODE -ne 0) { throw "Python dependency installation failed." }
+
       - name: Download offline AI model
-        run: python scripts/download_model.py
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python scripts/download_model.py
+          if ($LASTEXITCODE -ne 0) { throw "Offline model download failed." }
+
+      - name: Verify source model
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $model = Join-Path $PWD "models\u2net.onnx"
+          if (-not (Test-Path $model -PathType Leaf)) { throw "Offline model is missing." }
+          if ((Get-Item $model).Length -lt 50000000) { throw "Offline model is unexpectedly small." }
+
       - name: Build application
-        run: pyinstaller --noconfirm --clean "E-Pix.spec"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          pyinstaller --noconfirm --clean "E-Pix.spec"
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
+
       - name: Validate application payload
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $appPath = Join-Path $PWD "dist\E-PIX PRO"
-          if (-not (Test-Path (Join-Path $appPath "E-PIX PRO.exe") -PathType Leaf)) {
-            throw "PyInstaller executable is missing."
-          }
-          # PyInstaller 6 stores spec-file data in _internal by default.
+          $exePath = Join-Path $appPath "E-PIX PRO.exe"
           $modelPath = Join-Path $appPath "_internal\models\u2net.onnx"
+          if (-not (Test-Path $exePath -PathType Leaf)) { throw "Application executable is missing." }
           if (-not (Test-Path $modelPath -PathType Leaf)) {
             $found = @(Get-ChildItem -Path $appPath -Filter "u2net.onnx" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
-            throw "Bundled U2Net model is missing from _internal\models. Found: $($found -join '; ')"
+            throw "Bundled U2Net model is missing. Found: $($found -join '; ')"
           }
-          if ((Get-Item $modelPath).Length -lt 50000000) {
-            throw "Bundled U2Net model is unexpectedly small."
-          }
-      - name: Create installer
+          if ((Get-Item $modelPath).Length -lt 50000000) { throw "Bundled U2Net model is unexpectedly small." }
+          @"
+          E-PIX PRO Windows installer
+          This application is not digitally signed.
+          Windows SmartScreen or browser download protection may show an unknown-publisher or reputation warning.
+          Do not disable security protection to run this file.
+          Build commit: $env:GITHUB_SHA
+          "@ | Set-Content (Join-Path $appPath "DOWNLOAD-INFO.txt") -Encoding UTF8
+
+      - name: Compile Windows installer
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -52,20 +98,24 @@ jobs:
           AppId={{8F0C73D4-7B90-4B14-8B0A-1E0A9E1C2026}
           AppName=E-PIX PRO
           AppVersion=0.1.0
+          AppPublisher=E-PIX PRO
           DefaultDirName={autopf}\E-PIX PRO
           DefaultGroupName=E-PIX PRO
           OutputDir=.
           OutputBaseFilename=E-PIX-PRO-Setup
-          Compression=lzma
+          Compression=lzma2
           SolidCompression=yes
           ArchitecturesInstallIn64BitMode=x64
+          PrivilegesRequired=admin
+          Uninstallable=yes
+          CloseApplications=yes
+          [Tasks]
+          Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
           [Files]
           Source: "..\dist\E-PIX PRO\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
           [Icons]
           Name: "{autoprograms}\E-PIX PRO"; Filename: "{app}\E-PIX PRO.exe"
           Name: "{autodesktop}\E-PIX PRO"; Filename: "{app}\E-PIX PRO.exe"; Tasks: desktopicon
-          [Tasks]
-          Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
           [Run]
           Filename: "{app}\E-PIX PRO.exe"; Description: "Launch E-PIX PRO"; Flags: nowait postinstall skipifsilent
           '@ | Set-Content installer\setup.iss -Encoding UTF8
@@ -73,12 +123,61 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found: $iscc" }
           & $iscc (Join-Path $PWD "installer\setup.iss")
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed with exit code $LASTEXITCODE" }
-          if (-not (Test-Path "installer\E-PIX-PRO-Setup.exe" -PathType Leaf)) {
-            throw "Installer output was not created in the expected location."
+          $setup = Join-Path $PWD "installer\E-PIX-PRO-Setup.exe"
+          if (-not (Test-Path $setup -PathType Leaf)) { throw "Installer output is missing." }
+          if ((Get-Item $setup).Length -lt 10000000) { throw "Installer output is unexpectedly small." }
+
+      - name: Scan application and installer with Microsoft Defender
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Get-Command Start-MpScan -ErrorAction SilentlyContinue)) {
+            throw "Microsoft Defender scan cmdlets are unavailable. Refusing to publish an unscanned installer."
           }
-      - uses: actions/upload-artifact@v4
+          Update-MpSignature -ErrorAction Stop
+          $scanStarted = Get-Date
+          Start-MpScan -ScanType CustomScan -ScanPath (Join-Path $PWD "dist\E-PIX PRO") -ErrorAction Stop
+          Start-MpScan -ScanType CustomScan -ScanPath (Join-Path $PWD "installer\E-PIX-PRO-Setup.exe") -ErrorAction Stop
+          $detections = @(Get-MpThreatDetection -ErrorAction Stop | Where-Object { $_.InitialDetectionTime -ge $scanStarted })
+          if ($detections.Count -gt 0) {
+            $detections | Format-List ThreatName, ThreatID, InitialDetectionTime, Resources
+            throw "Microsoft Defender reported a threat. Installer publication stopped."
+          }
+          Write-Host "Microsoft Defender scans completed with no new detections."
+
+      - name: Generate checksums and build manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $setupPath = "installer\E-PIX-PRO-Setup.exe"
+          $setupHash = (Get-FileHash $setupPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$setupHash  E-PIX-PRO-Setup.exe" | Set-Content "installer\SHA256SUMS.txt" -Encoding ASCII
+          $signature = Get-AuthenticodeSignature $setupPath
+          $manifest = [ordered]@{
+            product = "E-PIX PRO"
+            artifact = "E-PIX-PRO-Setup.exe"
+            source_commit = $env:GITHUB_SHA
+            workflow_run = $env:GITHUB_RUN_ID
+            built_utc = (Get-Date).ToUniversalTime().ToString("o")
+            runtime = "Windows x64"
+            setup_sha256 = $setupHash
+            authenticode_status = [string]$signature.Status
+            digitally_signed = ($signature.Status -eq "Valid")
+            malware_scan = "Microsoft Defender scan completed; no new detections reported"
+            note = "Unsigned builds may trigger browser or SmartScreen reputation warnings. A clean scan and checksum are not a safety guarantee."
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content "installer\BUILD-MANIFEST.json" -Encoding UTF8
+          Get-Content "installer\SHA256SUMS.txt"
+          Get-Content "installer\BUILD-MANIFEST.json"
+
+      - name: Upload verified Windows installer
+        uses: actions/upload-artifact@v4
         with:
           name: E-PIX-PRO-Windows-Installer
-          path: installer/E-PIX-PRO-Setup.exe
+          path: |
+            installer/E-PIX-PRO-Setup.exe
+            installer/SHA256SUMS.txt
+            installer/BUILD-MANIFEST.json
           if-no-files-found: error
           retention-days: 30
+          compression-level: 0
