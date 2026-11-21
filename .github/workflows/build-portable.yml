@@ -1,41 +1,142 @@
 name: Build E-PIX PRO portable version
+
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
       - "app.py"
+      - "ai_portrait.py"
       - "E-Pix.spec"
       - "requirements.txt"
       - "scripts/**"
+      - "README.md"
       - ".github/workflows/build-portable.yml"
+
 permissions:
   contents: read
+
 jobs:
   portable:
     runs-on: windows-2022
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           architecture: x64
+
       - name: Install application dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
+
       - name: Download offline AI model
         run: python scripts/download_model.py
+
       - name: Build portable application folder
         run: pyinstaller --noconfirm --clean "E-Pix.spec"
-      - name: Package portable ZIP
+
+      - name: Validate application payload and create portable ZIP
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist\E-PIX PRO" -DestinationPath "E-PIX-PRO-Portable.zip" -CompressionLevel Optimal
-      - name: Upload portable ZIP
+          $ErrorActionPreference = "Stop"
+          $appPath = Join-Path $PWD "dist\E-PIX PRO"
+          $exePath = Join-Path $appPath "E-PIX PRO.exe"
+          $modelPath = Join-Path $appPath "models\u2net.onnx"
+
+          if (-not (Test-Path $exePath -PathType Leaf)) {
+            throw "Expected application executable is missing: $exePath"
+          }
+          if (-not (Test-Path $modelPath -PathType Leaf)) {
+            throw "Bundled offline AI model is missing: $modelPath"
+          }
+
+          @"
+          E-PIX PRO portable build
+          This application is not digitally signed.
+          Windows SmartScreen or browser download protection may show an unknown-publisher or reputation warning.
+          Do not disable security protection to run this file.
+          Verify the ZIP SHA-256 using SHA256SUMS.txt supplied beside the ZIP in the GitHub Actions artifact.
+          Build commit: $env:GITHUB_SHA
+          "@ | Set-Content (Join-Path $appPath "DOWNLOAD-INFO.txt") -Encoding UTF8
+
+          if (Test-Path "E-PIX-PRO-Portable.zip") {
+            Remove-Item "E-PIX-PRO-Portable.zip" -Force
+          }
+          Compress-Archive -Path $appPath -DestinationPath "E-PIX-PRO-Portable.zip" -CompressionLevel Optimal
+
+          $verifyDir = Join-Path $env:RUNNER_TEMP "epix-zip-verify"
+          if (Test-Path $verifyDir) { Remove-Item $verifyDir -Recurse -Force }
+          Expand-Archive -LiteralPath "E-PIX-PRO-Portable.zip" -DestinationPath $verifyDir -Force
+          if (-not (Test-Path (Join-Path $verifyDir "E-PIX PRO\E-PIX PRO.exe"))) {
+            throw "The portable ZIP does not contain the expected EXE."
+          }
+          if (-not (Test-Path (Join-Path $verifyDir "E-PIX PRO\models\u2net.onnx"))) {
+            throw "The portable ZIP does not contain the offline AI model."
+          }
+
+      - name: Scan build folder and ZIP with Microsoft Defender
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Get-Command Start-MpScan -ErrorAction SilentlyContinue)) {
+            throw "Microsoft Defender scan cmdlets are unavailable on this runner. Refusing to publish an unscanned build."
+          }
+
+          Update-MpSignature -ErrorAction Stop
+          $scanStarted = Get-Date
+          Start-MpScan -ScanType CustomScan -ScanPath (Join-Path $PWD "dist\E-PIX PRO") -ErrorAction Stop
+          Start-MpScan -ScanType CustomScan -ScanPath (Join-Path $PWD "E-PIX-PRO-Portable.zip") -ErrorAction Stop
+
+          $detections = @(Get-MpThreatDetection -ErrorAction Stop | Where-Object {
+            $_.InitialDetectionTime -ge $scanStarted
+          })
+          if ($detections.Count -gt 0) {
+            $detections | Format-List ThreatName, ThreatID, InitialDetectionTime, Resources
+            throw "Microsoft Defender reported a threat in this build. Artifact publication stopped."
+          }
+          Write-Host "Microsoft Defender completed scans with no new detections."
+
+      - name: Create SHA-256 checksums and build manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zipHash = (Get-FileHash "E-PIX-PRO-Portable.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $exeHash = (Get-FileHash "dist\E-PIX PRO\E-PIX PRO.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$zipHash  E-PIX-PRO-Portable.zip" | Set-Content "SHA256SUMS.txt" -Encoding ASCII
+
+          $signature = Get-AuthenticodeSignature "dist\E-PIX PRO\E-PIX PRO.exe"
+          $manifest = [ordered]@{
+            product = "E-PIX PRO"
+            artifact = "E-PIX-PRO-Portable.zip"
+            source_commit = $env:GITHUB_SHA
+            workflow_run = $env:GITHUB_RUN_ID
+            built_utc = (Get-Date).ToUniversalTime().ToString("o")
+            runtime = "Windows x64"
+            python = (python --version 2>&1 | Out-String).Trim()
+            zip_sha256 = $zipHash
+            executable_sha256 = $exeHash
+            authenticode_status = [string]$signature.Status
+            digitally_signed = ($signature.Status -eq "Valid")
+            malware_scan = "Microsoft Defender scan completed; no new detections reported"
+            note = "A clean Defender scan and matching checksum do not guarantee that Chrome Safe Browsing or SmartScreen will trust an unsigned application."
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content "BUILD-MANIFEST.json" -Encoding UTF8
+          Get-Content "SHA256SUMS.txt"
+          Get-Content "BUILD-MANIFEST.json"
+
+      - name: Upload verified portable package and verification files
         uses: actions/upload-artifact@v4
         with:
           name: E-PIX-PRO-Portable-Windows
-          path: E-PIX-PRO-Portable.zip
+          path: |
+            E-PIX-PRO-Portable.zip
+            SHA256SUMS.txt
+            BUILD-MANIFEST.json
           if-no-files-found: error
           retention-days: 30
+          compression-level: 0
