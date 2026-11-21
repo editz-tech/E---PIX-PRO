@@ -93,10 +93,16 @@ class FaceAnalyzer:
             ys = np.array([p.y * height for p in points], dtype=np.float32)
             x0, x1 = int(max(0, np.floor(xs.min()))), int(min(width, np.ceil(xs.max())))
             y0, y1 = int(max(0, np.floor(ys.min()))), int(min(height, np.ceil(ys.max())))
-            # FaceMesh eye outer corners: 33 and 263.
-            right_eye, left_eye = points[33], points[263]
-            dx = (left_eye.x - right_eye.x) * width
-            dy = (left_eye.y - right_eye.y) * height
+            # Estimate head roll from both eye centres, not just the outer corners.
+            # FaceMesh indices: right eye 33/133, left eye 362/263.
+            # Averaging inner + outer corners is more stable under eyelid shape
+            # and small landmark jitter.
+            right_eye = ((points[33].x + points[133].x) / 2.0,
+                         (points[33].y + points[133].y) / 2.0)
+            left_eye = ((points[362].x + points[263].x) / 2.0,
+                        (points[362].y + points[263].y) / 2.0)
+            dx = (left_eye[0] - right_eye[0]) * width
+            dy = (left_eye[1] - right_eye[1]) * height
             face_roll = float(np.degrees(np.arctan2(dy, dx)))
             if x1 > x0 and y1 > y0:
                 face_box = (x0, y0, x1 - x0, y1 - y0)
@@ -122,18 +128,37 @@ class FaceAnalyzer:
 
 
 def straighten_roll(image, analyzer):
-    """Level the shoulder line; fall back to eye-line roll if shoulders are hidden."""
+    """Make the face/eye line the primary reference for rotation.
+
+    Shoulder slope is measured independently for diagnostics, but must never
+    override the face angle: doing so can leave the face visibly tilted.
+    A rigid rotation preserves facial geometry and pixels (apart from normal
+    resampling); it does not synthesize, reshape or reconstruct facial features.
+    """
     face_box, face_roll, shoulder_roll = analyzer.analyze(image)
-    roll = shoulder_roll if shoulder_roll is not None else face_roll
-    # Do not over-correct genuine body posture. A small shoulder tilt is corrected
-    # automatically; larger angles are limited and should be reviewed.
-    applied = max(-8.0, min(8.0, roll)) if abs(roll) >= 0.7 else 0.0
+
+    # Priority: face eye-line first. Only use the shoulder line when a face
+    # cannot be detected at all. This fixes the previous shoulder-first logic.
+    if face_box is not None:
+        roll = face_roll
+    elif shoulder_roll is not None:
+        roll = shoulder_roll
+    else:
+        roll = 0.0
+
+    applied = max(-8.0, min(8.0, roll)) if abs(roll) >= 0.5 else 0.0
     if applied:
         image = image.rotate(
             applied, resample=Image.Resampling.BICUBIC, expand=True,
             fillcolor=(0, 0, 0, 0)
         )
-        face_box, _, _ = analyzer.analyze(image)
+        face_box, _, shoulder_after = analyzer.analyze(image)
+    else:
+        shoulder_after = shoulder_roll
+
+    # Do not apply a second whole-image shoulder rotation: that would tilt the
+    # face again. The remaining shoulder slope is retained for the processing
+    # log so photos with independent shoulder posture can be reviewed safely.
     return image, face_box, applied
 
 
