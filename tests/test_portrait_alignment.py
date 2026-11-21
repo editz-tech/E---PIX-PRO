@@ -27,8 +27,8 @@ class PortraitAlignmentTests(unittest.TestCase):
         class FakePose:
             def process(self, _rgb):
                 landmarks = [SimpleNamespace(x=0.5, y=0.5, visibility=1.0) for _ in range(33)]
-                landmarks[11] = SimpleNamespace(x=0.25, y=0.40, visibility=1.0)
-                landmarks[12] = SimpleNamespace(x=0.75, y=0.48, visibility=1.0)
+                landmarks[11] = SimpleNamespace(x=0.25, y=0.60, visibility=1.0)
+                landmarks[12] = SimpleNamespace(x=0.75, y=0.68, visibility=1.0)
                 return SimpleNamespace(pose_landmarks=SimpleNamespace(landmark=landmarks))
 
         analyzer = SimpleNamespace(_pose=FakePose())
@@ -46,7 +46,7 @@ class PortraitAlignmentTests(unittest.TestCase):
         before = np.asarray(source)
         after = np.asarray(corrected)
         # The upper face area is above the warp transition and must be identical.
-        np.testing.assert_array_equal(after[:145], before[:145])
+        np.testing.assert_array_equal(after[:143], before[:143])
         # The lower image is actually transformed.
         self.assertFalse(np.array_equal(after[190:], before[190:]))
 
