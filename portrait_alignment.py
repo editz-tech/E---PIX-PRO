@@ -130,11 +130,9 @@ def straighten_portrait(image: Image.Image, analyzer):
     image = image.convert("RGBA")
     face_box, face_roll, shoulder_roll = analyzer.analyze(image)
 
-    # Eye-line roll controls head orientation. If no face is detected, use the
-    # shoulder line only as a conservative fallback; never rotate by guesswork.
-    requested_roll = face_roll if face_box is not None else (
-        shoulder_roll if shoulder_roll is not None else 0.0
-    )
+    # Only a detected eye line may authorize head rotation. If the face cannot
+    # be detected, do not infer its orientation from the shoulders.
+    requested_roll = face_roll if face_box is not None else 0.0
     applied_roll = 0.0
     if abs(requested_roll) >= 0.5:
         applied_roll = float(np.clip(
