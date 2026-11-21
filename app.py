@@ -143,22 +143,23 @@ def passport_crop(subject_rgba, face_box=None):
         fh = max(1.0, float(fh))
         face_cx = float(fx) + float(fw) / 2.0
 
-        # Match the approved demo framing. A 50% face-height target gives
-        # the head more breathing room than the previous 54% setting.
-        crop_h = fh / 0.50
+        # Match the approved demo framing: include more hair, both sides of
+        # the head, shoulders and upper chest. Target a smaller face at 45%.
+        FACE_HEIGHT_TARGET = 0.45
+        TOP_WHITE_MARGIN = 0.022
+        crop_h = fh / FACE_HEIGHT_TARGET
         crop_w = crop_h * target_ratio
         left = face_cx - crop_w / 2.0
 
-        # Anchor the top margin to the actual segmented hair silhouette,
-        # not the FaceMesh forehead boundary. This makes the white space
-        # above the hair predictable even when hairstyles vary.
+        # Detect thin flyaway hair as well as the dense hair mass. The old
+        # row threshold ignored sparse crown strands and clipped the top margin.
         alpha = np.asarray(rgba.getchannel("A"), dtype=np.uint8)
-        foreground_rows = np.count_nonzero(alpha > 96, axis=1)
-        min_row_pixels = max(8, int(round(src_w * 0.012)))
+        foreground_rows = np.count_nonzero(alpha > 48, axis=1)
+        min_row_pixels = max(4, int(round(src_w * 0.0045)))
         visible_rows = np.flatnonzero(foreground_rows >= min_row_pixels)
         if visible_rows.size:
             hair_top = float(visible_rows[0])
-            top = hair_top - (0.020 * crop_h)
+            top = hair_top - (TOP_WHITE_MARGIN * crop_h)
         else:
             # Conservative fallback if the foreground mask is empty.
             top = float(fy) - (0.45 * fh)
@@ -194,11 +195,10 @@ def process_photo(source, destination, session, face_analyzer):
     # globally brighten or recolour the subject.
     subject_alpha = cutout.getchannel("A")
     subject_rgb = cutout.convert("RGB")
-    # Match the demo's lighter, softer portrait tone without bleaching
-    # highlights or shifting skin strongly toward orange.
-    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.045)
-    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(0.98)
-    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(0.99)
+    # Match the demo's brighter, softer and less saturated appearance.
+    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.06)
+    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(0.96)
+    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(0.97)
     cutout = subject_rgb.convert("RGBA")
     cutout.putalpha(subject_alpha)
     # Use the post-straightening face position to centre the final portrait.
