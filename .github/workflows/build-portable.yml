@@ -6,7 +6,7 @@ on:
     branches: [main]
     paths:
       - "app.py"
-      - "ai_portrait.py"
+      - "ai_portrait.py"\n      - "ai_clothing.py"
       - "E-Pix.spec"
       - "requirements.txt"
       - "scripts/**"
