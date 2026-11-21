@@ -8,6 +8,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-2022
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,9 +25,27 @@ jobs:
         run: python scripts/download_model.py
       - name: Build application
         run: pyinstaller --noconfirm --clean "E-Pix.spec"
+      - name: Validate application payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $appPath = Join-Path $PWD "dist\E-PIX PRO"
+          if (-not (Test-Path (Join-Path $appPath "E-PIX PRO.exe") -PathType Leaf)) {
+            throw "PyInstaller executable is missing."
+          }
+          # PyInstaller 6 stores spec-file data in _internal by default.
+          $modelPath = Join-Path $appPath "_internal\models\u2net.onnx"
+          if (-not (Test-Path $modelPath -PathType Leaf)) {
+            $found = @(Get-ChildItem -Path $appPath -Filter "u2net.onnx" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+            throw "Bundled U2Net model is missing from _internal\models. Found: $($found -join '; ')"
+          }
+          if ((Get-Item $modelPath).Length -lt 50000000) {
+            throw "Bundled U2Net model is unexpectedly small."
+          }
       - name: Create installer
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force installer | Out-Null
           @'
           [Setup]
@@ -35,13 +54,13 @@ jobs:
           AppVersion=0.1.0
           DefaultDirName={autopf}\E-PIX PRO
           DefaultGroupName=E-PIX PRO
-          OutputDir=installer
+          OutputDir=.
           OutputBaseFilename=E-PIX-PRO-Setup
           Compression=lzma
           SolidCompression=yes
           ArchitecturesInstallIn64BitMode=x64
           [Files]
-          Source: "dist\E-PIX PRO\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+          Source: "..\dist\E-PIX PRO\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
           [Icons]
           Name: "{autoprograms}\E-PIX PRO"; Filename: "{app}\E-PIX PRO.exe"
           Name: "{autodesktop}\E-PIX PRO"; Filename: "{app}\E-PIX PRO.exe"; Tasks: desktopicon
@@ -49,12 +68,17 @@ jobs:
           Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
           [Run]
           Filename: "{app}\E-PIX PRO.exe"; Description: "Launch E-PIX PRO"; Flags: nowait postinstall skipifsilent
-          '@ | Set-Content installer\setup.iss
+          '@ | Set-Content installer\setup.iss -Encoding UTF8
           $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found: $iscc" }
-          & $iscc installer\setup.iss
+          & $iscc (Join-Path $PWD "installer\setup.iss")
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path "installer\E-PIX-PRO-Setup.exe" -PathType Leaf)) {
+            throw "Installer output was not created in the expected location."
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: E-PIX-PRO-Windows-Installer
           path: installer/E-PIX-PRO-Setup.exe
           if-no-files-found: error
+          retention-days: 30
