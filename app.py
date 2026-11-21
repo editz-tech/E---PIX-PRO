@@ -274,15 +274,21 @@ def process_photo(source, destination, session, face_analyzer, generative_api_ke
 
     # Option 1: AI edits only the lower clothing/shoulder area. The source
     # face/head region is protected by an API mask and composited back locally.
-    if generative_api_key:
+    ai_clothing_mode = bool(generative_api_key)
+    if ai_clothing_mode:
         source_rgb = original.convert("RGB")
         source_face_box, _, _ = face_analyzer.analyze(source_rgb)
         corrected = correct_clothing_shoulders(
             source_rgb, generative_api_key, source_face_box
         )
         original = corrected.convert("RGBA")
+        # Do not rotate/shear the source in AI clothing mode: that would alter
+        # the original facial pixels. The AI balances the clothing silhouette.
+        face_box, _, _ = face_analyzer.analyze(original)
+        roll = 0.0
+    else:
+        original, face_box, roll = straighten_roll(original, face_analyzer)
 
-    original, face_box, roll = straighten_roll(original, face_analyzer)
     cutout = session.remove_background(original)
     # Keep colour neutral. The earlier saturation boost made skin too orange
     # compared with the approved demo. Use restrained contrast only; do not
@@ -325,14 +331,13 @@ class Worker(QObject):
         self.generative_api_key = generative_api_key
     def run(self):
         try:
-            session = None
-            if not self.generative_api_key:
-                model_dir = resource_path("models")
-                os.environ["U2NET_HOME"] = str(model_dir)
-                model = model_dir / "u2net.onnx"
-                if not model.exists():
-                    raise RuntimeError("Offline AI model missing. Reinstall the application.")
-                session = U2NetSession(model)
+            model_dir = resource_path("models")
+            os.environ["U2NET_HOME"] = str(model_dir)
+            model = model_dir / "u2net.onnx"
+            if not model.exists():
+                raise RuntimeError("Offline background-removal model missing. Reinstall the application.")
+            # Background removal is still local/offline in both processing modes.
+            session = U2NetSession(model)
             face_analyzer = FaceAnalyzer()
             ok = errors = 0
             for i, src in enumerate(self.files, 1):
