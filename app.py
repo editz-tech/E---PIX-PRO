@@ -341,11 +341,14 @@ class Worker(QObject):
         self.generative_api_key = generative_api_key
     def run(self):
         try:
-            model_dir = resource_path("models")
-            os.environ["U2NET_HOME"] = str(model_dir)
-            model = model_dir / "u2net.onnx"
-            if not model.exists(): raise RuntimeError("Offline AI model missing. Reinstall the application.")
-            session = U2NetSession(model)
+            session = None
+            if not self.generative_api_key:
+                model_dir = resource_path("models")
+                os.environ["U2NET_HOME"] = str(model_dir)
+                model = model_dir / "u2net.onnx"
+                if not model.exists():
+                    raise RuntimeError("Offline AI model missing. Reinstall the application.")
+                session = U2NetSession(model)
             face_analyzer = FaceAnalyzer()
             ok = errors = 0
             for i, src in enumerate(self.files, 1):
