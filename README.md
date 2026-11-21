@@ -18,8 +18,6 @@ The offline workflow does not generatively redraw the face. The alignment stage 
 
 The offline background-removal model segments the existing subject. It does not generate missing shoulders or invent new clothing. Shoulder leveling is geometric and conservatively limited to avoid unnatural body distortion. If a source photo is genuinely side-facing (yaw), has an occluded shoulder, or lacks enough body pixels, this offline workflow cannot create a reliable frontal face or realistic missing clothing. Such cases should be flagged for manual review rather than silently fabricated.
 
-The offline background-removal model segments the existing subject. It does not generate missing shoulders or invent new clothing. Shoulder correction is geometric and limited; if a source photo does not contain enough shoulder/body information, the software cannot reliably reconstruct it without generative image synthesis.
-
 ## Build
 
 Install dependencies from `requirements.txt`. Package `app.py` and the `models/u2net.onnx` asset with the Windows application.
