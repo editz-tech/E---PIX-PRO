@@ -37,6 +37,20 @@ jobs:
       - name: Download offline AI model
         run: python scripts/download_model.py
 
+      - name: Confirm source AI model before packaging
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sourceModel = Join-Path $PWD "models\u2net.onnx"
+          if (-not (Test-Path $sourceModel -PathType Leaf)) {
+            throw "Model download step did not create $sourceModel"
+          }
+          $model = Get-Item $sourceModel
+          if ($model.Length -lt 50000000) {
+            throw "U2Net model is unexpectedly small ($($model.Length) bytes)."
+          }
+          Write-Host "Source model verified: $($model.Length) bytes"
+
       - name: Build portable application folder
         run: pyinstaller --noconfirm --clean "E-Pix.spec"
 
@@ -46,13 +60,18 @@ jobs:
           $ErrorActionPreference = "Stop"
           $appPath = Join-Path $PWD "dist\E-PIX PRO"
           $exePath = Join-Path $appPath "E-PIX PRO.exe"
-          $modelPath = Join-Path $appPath "models\u2net.onnx"
+          # PyInstaller 6 places bundled data under _internal by default.
+          $modelPath = Join-Path $appPath "_internal\models\u2net.onnx"
 
           if (-not (Test-Path $exePath -PathType Leaf)) {
             throw "Expected application executable is missing: $exePath"
           }
           if (-not (Test-Path $modelPath -PathType Leaf)) {
-            throw "Bundled offline AI model is missing: $modelPath"
+            $found = @(Get-ChildItem -Path $appPath -Filter "u2net.onnx" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+            throw "Bundled model is missing from PyInstaller's _internal\models folder. Found model files: $($found -join '; ')"
+          }
+          if ((Get-Item $modelPath).Length -lt 50000000) {
+            throw "Bundled U2Net model is unexpectedly small."
           }
 
           @"
@@ -75,8 +94,8 @@ jobs:
           if (-not (Test-Path (Join-Path $verifyDir "E-PIX PRO\E-PIX PRO.exe"))) {
             throw "The portable ZIP does not contain the expected EXE."
           }
-          if (-not (Test-Path (Join-Path $verifyDir "E-PIX PRO\models\u2net.onnx"))) {
-            throw "The portable ZIP does not contain the offline AI model."
+          if (-not (Test-Path (Join-Path $verifyDir "E-PIX PRO\_internal\models\u2net.onnx"))) {
+            throw "The portable ZIP does not contain the offline AI model in PyInstaller's _internal folder."
           }
 
       - name: Scan build folder and ZIP with Microsoft Defender
