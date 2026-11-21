@@ -7,14 +7,14 @@ Windows passport and ID photo studio with an offline, identity-preserving portra
 The desktop workflow is local/offline. It does not request an API key or transmit photographs to an image-generation service.
 
 - Uses face landmarks to correct modest in-plane head roll.
-- Detects shoulder landmarks and applies a restrained lower-torso alignment below the face region.
+- Detects both shoulder landmarks, corrects the measured shoulder-line slope (bounded to 12 degrees), and gradually centres the torso beneath the detected face. The body remap starts below the face box.
 - Uses a wider face-relative crop (38% target face-box height) to show more upper body and shoulder area.
 - Does not use generative AI to redraw or reconstruct facial features. When roll correction is applied, a rigid image rotation resamples pixels, but it does not synthesize or reshape facial features.
 - Uses the bundled ONNX segmentation model for background removal and white-background compositing.
 
 ### Important limitations
 
-Preserving the original face means the application cannot safely synthesize a new frontal face from a true yaw/pitch angle, change facial perspective, or reconstruct unseen facial details. It can correct modest 2D roll only. Shoulder correction is geometric and depends on reliable shoulder landmarks; it cannot guarantee identical anatomical shoulder lengths for every pose. Missing body/clothing outside the source frame cannot be recreated faithfully by this offline pipeline. Review every result before official use.
+Preserving the original face means the application cannot safely synthesize a new frontal face from a true yaw/pitch angle, change facial perspective, or reconstruct unseen facial details. It can correct modest 2D roll only. Shoulder correction is geometric, not generative. It depends on reliable shoulder landmarks and is bounded to avoid severe distortion; it cannot guarantee identical anatomical shoulder lengths for every pose or reconstruct a missing shoulder. Missing body/clothing outside the source frame cannot be recreated faithfully by this offline pipeline. Review every result before official use.
 
 The former full-generative API integration is not part of the desktop processing workflow. No API key is requested or required.
 
