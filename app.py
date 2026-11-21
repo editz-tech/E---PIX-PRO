@@ -5,7 +5,6 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance, ImageChops
-from ai_portrait import generate_portrait
 from PySide6.QtCore import QObject, Signal, QThread
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox)
 
@@ -129,81 +128,81 @@ class FaceAnalyzer:
 
 
 def straighten_roll(image, analyzer):
-    """Straighten the face first, then level only the lower shoulder/body region.
+    """Level the head from the eye line, then gently level the torso below the jaw.
 
-    The face is never locally warped. Expanded rotation uses replicated edge
-    pixels instead of transparent fill, preventing white/transparent wedges
-    from appearing in the shirt after background removal.
+    The facial region is never locally warped or regenerated. A single small
+    rigid rotation may be applied to the complete source frame to correct roll;
+    the subsequent shoulder correction is restricted to the neck/torso region.
     """
-    face_box, face_roll, shoulder_roll = analyzer.analyze(image)
+    face_box, face_roll, _ = analyzer.analyze(image)
+    if face_box is None:
+        # Without reliable face landmarks, do not guess a head correction.
+        return image, None, 0.0
 
-    # The eye line is the authority for head alignment.
-    if face_box is not None:
-        roll = face_roll
-    elif shoulder_roll is not None:
-        roll = shoulder_roll
-    else:
-        roll = 0.0
-
-    applied = max(-8.0, min(8.0, roll)) if abs(roll) >= 0.5 else 0.0
-
+    # Correct only in-plane roll. Yaw/pitch cannot be made frontal without
+    # synthesizing facial pixels, which this identity-preserving mode forbids.
+    applied = max(-8.0, min(8.0, face_roll)) if abs(face_roll) >= 0.5 else 0.0
     if applied:
-        # Expand the canvas while replicating boundary pixels. This is
-        # important at the lower corners: shirt pixels are continued instead
-        # of introducing transparent triangles that become white in the JPEG.
         arr = np.asarray(image.convert("RGBA"))
         h, w = arr.shape[:2]
         center = (w / 2.0, h / 2.0)
         matrix = cv2.getRotationMatrix2D(center, applied, 1.0)
-        cos_a = abs(matrix[0, 0])
-        sin_a = abs(matrix[0, 1])
-        new_w = int(round((h * sin_a) + (w * cos_a)))
-        new_h = int(round((h * cos_a) + (w * sin_a)))
-        matrix[0, 2] += (new_w / 2.0) - center[0]
-        matrix[1, 2] += (new_h / 2.0) - center[1]
+        c, s = abs(matrix[0, 0]), abs(matrix[0, 1])
+        new_w = int(round(h * s + w * c))
+        new_h = int(round(h * c + w * s))
+        matrix[0, 2] += new_w / 2.0 - center[0]
+        matrix[1, 2] += new_h / 2.0 - center[1]
         rotated = cv2.warpAffine(
-            arr, matrix, (new_w, new_h),
-            flags=cv2.INTER_CUBIC,
+            arr, matrix, (new_w, new_h), flags=cv2.INTER_CUBIC,
             borderMode=cv2.BORDER_REPLICATE
         )
         image = Image.fromarray(rotated, mode="RGBA")
-        face_box, _, shoulder_roll = analyzer.analyze(image)
+        face_box, _, _ = analyzer.analyze(image)
+        if face_box is None:
+            return image, None, applied
 
-    # Level the shoulder line with a gradual vertical shear confined to the
-    # neck/body and shirt below the detected face. The face and hair region
-    # remain untouched; no face pixels are reconstructed or reshaped.
-    pose_result = analyzer._pose.process(np.asarray(image.convert("RGB")))
-    if pose_result.pose_landmarks and face_box is not None:
-        lm = pose_result.pose_landmarks.landmark
-        ls, rs = lm[11], lm[12]
-        if min(ls.visibility, rs.visibility) >= 0.55:
+    # Detect shoulders again after head-roll correction. Sort by image x so
+    # the calculation is independent of MediaPipe's anatomical left/right
+    # naming convention (which can be reversed in a front-facing photo).
+    pose = analyzer._pose.process(np.asarray(image.convert("RGB")))
+    if pose.pose_landmarks:
+        lm = pose.pose_landmarks.landmark
+        shoulders = [lm[11], lm[12]]
+        if min(p.visibility for p in shoulders) >= 0.60:
+            shoulders.sort(key=lambda p: p.x)
+            left, right = shoulders
             h, w = image.height, image.width
-            x1, y1 = ls.x * w, ls.y * h
-            x2, y2 = rs.x * w, rs.y * h
-            dx, dy = x2 - x1, y2 - y1
-            if abs(dx) > 1.0:
-                shoulder_angle = float(np.degrees(np.arctan2(dy, dx)))
-                # Do not apply extreme corrections to naturally sloped poses.
-                limited_angle = max(-5.0, min(5.0, shoulder_angle))
-                slope = float(np.tan(np.radians(limited_angle)))
-                if abs(limited_angle) >= 0.8:
+            x1, y1 = left.x * w, left.y * h
+            x2, y2 = right.x * w, right.y * h
+            dx = x2 - x1
+            if dx > max(20.0, w * 0.08):
+                angle = float(np.degrees(np.arctan2(y2 - y1, dx)))
+                # Avoid extreme perspective correction on a genuinely
+                # asymmetric pose. This corrects mild camera/body roll only.
+                correction = max(-6.0, min(6.0, angle))
+                if abs(correction) >= 0.7:
+                    slope = float(np.tan(np.radians(correction)))
                     center_x = (x1 + x2) / 2.0
                     shoulder_y = (y1 + y2) / 2.0
                     face_bottom = float(face_box[1] + face_box[3])
-                    start_y = min(float(h - 2), max(face_bottom + 2.0, 0.0))
+                    face_h = max(1.0, float(face_box[3]))
+                    start_y = min(float(h - 2), face_bottom + 0.035 * face_h)
                     end_y = max(start_y + 1.0, min(float(h - 1), shoulder_y))
                     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-                    blend = np.clip((yy - start_y) / (end_y - start_y), 0.0, 1.0)
+                    t = np.clip((yy - start_y) / (end_y - start_y), 0.0, 1.0)
+                    blend = t * t * (3.0 - 2.0 * t)
+                    # Inverse-map the lower torso so both shoulder landmarks
+                    # land on one horizontal line. The face/hair pixels above
+                    # start_y have blend=0 and are not locally transformed.
                     map_x = xx
                     map_y = yy + (slope * (xx - center_x) * blend).astype(np.float32)
-                    src = np.asarray(image.convert("RGBA"))
-                    leveled = cv2.remap(
-                        src, map_x, map_y, interpolation=cv2.INTER_CUBIC,
+                    source = np.asarray(image.convert("RGBA"))
+                    corrected = cv2.remap(
+                        source, map_x, map_y, interpolation=cv2.INTER_CUBIC,
                         borderMode=cv2.BORDER_REPLICATE
                     )
-                    image = Image.fromarray(leveled, mode="RGBA")
+                    image = Image.fromarray(corrected, mode="RGBA")
 
-    # Refresh face bounds after the lower-body warp for accurate crop placement.
     face_box, _, _ = analyzer.analyze(image)
     return image, face_box, applied
 
@@ -228,7 +227,7 @@ def passport_crop(subject_rgba, face_box=None):
 
         # Match the approved demo framing: include more hair, both sides of
         # the head, shoulders and upper chest. Target a smaller face at 45%.
-        FACE_HEIGHT_TARGET = 0.42
+        FACE_HEIGHT_TARGET = 0.38
         TOP_WHITE_MARGIN = 0.022
         crop_h = fh / FACE_HEIGHT_TARGET
         crop_w = crop_h * target_ratio
@@ -268,52 +267,24 @@ def passport_crop(subject_rgba, face_box=None):
     canvas.alpha_composite(rgba, (0, 0))
     return canvas.convert("RGB")
 
-def process_photo(source, destination, session, face_analyzer, generative_api_key=None):
+def process_photo(source, destination, session, face_analyzer):
     with Image.open(source) as opened:
         original = ImageOps.exif_transpose(opened).convert("RGBA")
 
-    # Full generative mode intentionally regenerates the whole portrait.
-    # It can improve pose/clothing/framing, but cannot guarantee exact identity.
-    if generative_api_key:
-        generated = generate_portrait(original.convert("RGB"), generative_api_key)
-        generated_rgba = generated.convert("RGBA")
-        generated_face_box, _, _ = face_analyzer.analyze(generated_rgba)
-        result = passport_crop(generated_rgba, generated_face_box)
-        result = result.filter(ImageFilter.UnsharpMask(radius=0.7, percent=65, threshold=4))
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        suffix = destination.suffix.lower()
-        if suffix in (".jpg", ".jpeg"):
-            result.save(destination, "JPEG", quality=96, dpi=DPI, optimize=True)
-        elif suffix == ".png":
-            result.save(destination, "PNG", dpi=DPI, optimize=True)
-        elif suffix in (".tif", ".tiff"):
-            result.save(destination, "TIFF", dpi=DPI, compression="tiff_lzw")
-        elif suffix == ".bmp":
-            result.save(destination, "BMP", dpi=DPI)
-        elif suffix == ".webp":
-            result.save(destination, "WEBP", quality=96, method=6)
-        else:
-            raise ValueError(f"Unsupported output format: {suffix}")
-        if generated_face_box is None:
-            return "GENERATIVE AI output — face not detected; manual review required"
-        return "GENERATIVE AI output — regenerated portrait; identity must be manually verified"
-
+    # Identity-preserving path: no external API, no face generation and no
+    # generative reconstruction. Facial features are never synthesized.
     original, face_box, roll = straighten_roll(original, face_analyzer)
     cutout = session.remove_background(original)
-    # Keep colour neutral. The earlier saturation boost made skin too orange
-    # compared with the approved demo. Use restrained contrast only; do not
-    # globally brighten or recolour the subject.
     subject_alpha = cutout.getchannel("A")
     subject_rgb = cutout.convert("RGB")
-    # Match the demo's brighter, softer and less saturated appearance.
-    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.06)
-    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(0.96)
-    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(0.97)
+    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.04)
+    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(0.97)
+    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(0.98)
     cutout = subject_rgb.convert("RGBA")
     cutout.putalpha(subject_alpha)
-    # Use the post-straightening face position to centre the final portrait.
+
     result = passport_crop(cutout, face_box)
-    result = result.filter(ImageFilter.UnsharpMask(radius=0.8, percent=85, threshold=4))
+    result = result.filter(ImageFilter.UnsharpMask(radius=0.7, percent=70, threshold=4))
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
     if suffix in (".jpg", ".jpeg"):
@@ -329,32 +300,29 @@ def process_photo(source, destination, session, face_analyzer, generative_api_ke
     else:
         raise ValueError(f"Unsupported output format: {suffix}")
     if face_box is None:
-        return "face not detected — centered fallback; retake/review recommended"
-    return f"landmark aligned; roll corrected {roll:.1f}°"
+        return "face not detected — no geometric correction; manual review required"
+    return f"face pixels preserved; roll corrected {roll:.1f}°; torso/shoulders levelled where detected"
 
 class Worker(QObject):
     progress = Signal(int, int, str)
     done = Signal(int, int)
     failed = Signal(str)
-    def __init__(self, files, output, generative_api_key=None):
+    def __init__(self, files, output):
         super().__init__(); self.files, self.output = files, output
-        self.generative_api_key = generative_api_key
     def run(self):
         try:
-            session = None
-            if not self.generative_api_key:
-                model_dir = resource_path("models")
-                os.environ["U2NET_HOME"] = str(model_dir)
-                model = model_dir / "u2net.onnx"
-                if not model.exists():
-                    raise RuntimeError("Offline AI model missing. Reinstall the application.")
-                session = U2NetSession(model)
+            model_dir = resource_path("models")
+            os.environ["U2NET_HOME"] = str(model_dir)
+            model = model_dir / "u2net.onnx"
+            if not model.exists():
+                raise RuntimeError("Offline AI model missing. Reinstall the application.")
+            session = U2NetSession(model)
             face_analyzer = FaceAnalyzer()
             ok = errors = 0
             for i, src in enumerate(self.files, 1):
                 try:
                     target = output_path_for(src, self.output)
-                    framing = process_photo(src, target, session, face_analyzer, self.generative_api_key); ok += 1
+                    framing = process_photo(src, target, session, face_analyzer); ok += 1
                     self.progress.emit(i, len(self.files), f"Saved ({framing}): {src.name} → {target.name}")
                 except Exception as exc:
                     errors += 1; self.progress.emit(i, len(self.files), f"FAILED: {src.name}: {exc}")
@@ -379,23 +347,13 @@ class MainWindow(QMainWindow):
         browse = QPushButton("Browse"); browse.clicked.connect(self.choose_output)
         outrow.addWidget(self.output); outrow.addWidget(browse); layout.addWidget(outbox)
         self.preserve = QCheckBox("Preserve original filename (required)"); self.preserve.setChecked(True); self.preserve.setEnabled(False); layout.addWidget(self.preserve)
-        self.generative = QCheckBox("Use FULL GENERATIVE AI portrait mode (changes the whole image)")
-        self.generative.setChecked(True)
-        layout.addWidget(self.generative)
-        apirow = QHBoxLayout()
-        apirow.addWidget(QLabel("OpenAI API key:"))
-        self.api_key = QLineEdit()
-        self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key.setPlaceholderText("Paste API key — used for this run only; not saved")
-        apirow.addWidget(self.api_key)
-        layout.addLayout(apirow)
         self.start = QPushButton("START PROCESSING"); self.start.setMinimumHeight(48)
         self.start.setStyleSheet("background:#1769aa;color:white;font-weight:700;border-radius:7px;")
         self.start.clicked.connect(self.start_processing); layout.addWidget(self.start)
         self.progress = QProgressBar(); layout.addWidget(self.progress)
         self.status = QLabel("Ready • Original photos are never modified."); layout.addWidget(self.status)
         self.log = QTextEdit(); self.log.setReadOnly(True); layout.addWidget(self.log)
-        note = QLabel("FULL GENERATIVE AI mode sends each original photo to the configured image-edit API and regenerates the complete portrait. Face identity and facial details may change; exact identity preservation is NOT guaranteed. Use only with consent, review every result, and verify the issuing authority rules. Uncheck generative mode to use the offline face-preserving workflow.")
+        note = QLabel("IDENTITY-PRESERVING MODE: no API key and no generative face replacement. The app corrects in-plane head roll and levels the lower shoulder/body region where landmarks are reliable. It cannot turn a true side-facing or tilted 3D face into a frontal view without changing facial pixels. Review every result before official use.")
         note.setWordWrap(True); note.setStyleSheet("color:#e3b341;"); layout.addWidget(note)
         self.setStyleSheet("""
             QMainWindow, QWidget {
@@ -476,14 +434,8 @@ class MainWindow(QMainWindow):
         if d: self.output.setText(d)
     def start_processing(self):
         if not self.files: QMessageBox.warning(self,"No photos","Choose one or more photos first."); return
-        use_gen = self.generative.isChecked()
-        api_key = self.api_key.text().strip() if use_gen else None
-        if use_gen and not api_key:
-            QMessageBox.warning(self, "API key required",
-                "Full Generative AI mode requires an API key. Paste your key, or uncheck generative mode to use offline processing.")
-            return
         self.start.setEnabled(False); self.progress.setValue(0); self.log.clear()
-        self.thread = QThread(); self.worker = Worker(self.files, Path(self.output.text()).expanduser(), api_key)
+        self.thread = QThread(); self.worker = Worker(self.files, Path(self.output.text()).expanduser())
         self.worker.moveToThread(self.thread); self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.on_progress); self.worker.done.connect(self.on_done); self.worker.failed.connect(self.on_failed)
         self.worker.done.connect(self.thread.quit); self.worker.failed.connect(self.thread.quit)
