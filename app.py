@@ -128,17 +128,15 @@ class FaceAnalyzer:
 
 
 def straighten_roll(image, analyzer):
-    """Make the face/eye line the primary reference for rotation.
+    """Straighten the face first, then level only the lower shoulder/body region.
 
-    Shoulder slope is measured independently for diagnostics, but must never
-    override the face angle: doing so can leave the face visibly tilted.
-    A rigid rotation preserves facial geometry and pixels (apart from normal
-    resampling); it does not synthesize, reshape or reconstruct facial features.
+    The face is never locally warped. Expanded rotation uses replicated edge
+    pixels instead of transparent fill, preventing white/transparent wedges
+    from appearing in the shirt after background removal.
     """
     face_box, face_roll, shoulder_roll = analyzer.analyze(image)
 
-    # Priority: face eye-line first. Only use the shoulder line when a face
-    # cannot be detected at all. This fixes the previous shoulder-first logic.
+    # The eye line is the authority for head alignment.
     if face_box is not None:
         roll = face_roll
     elif shoulder_roll is not None:
@@ -147,18 +145,65 @@ def straighten_roll(image, analyzer):
         roll = 0.0
 
     applied = max(-8.0, min(8.0, roll)) if abs(roll) >= 0.5 else 0.0
-    if applied:
-        image = image.rotate(
-            applied, resample=Image.Resampling.BICUBIC, expand=True,
-            fillcolor=(0, 0, 0, 0)
-        )
-        face_box, _, shoulder_after = analyzer.analyze(image)
-    else:
-        shoulder_after = shoulder_roll
 
-    # Do not apply a second whole-image shoulder rotation: that would tilt the
-    # face again. The remaining shoulder slope is retained for the processing
-    # log so photos with independent shoulder posture can be reviewed safely.
+    if applied:
+        # Expand the canvas while replicating boundary pixels. This is
+        # important at the lower corners: shirt pixels are continued instead
+        # of introducing transparent triangles that become white in the JPEG.
+        arr = np.asarray(image.convert("RGBA"))
+        h, w = arr.shape[:2]
+        center = (w / 2.0, h / 2.0)
+        matrix = cv2.getRotationMatrix2D(center, applied, 1.0)
+        cos_a = abs(matrix[0, 0])
+        sin_a = abs(matrix[0, 1])
+        new_w = int(round((h * sin_a) + (w * cos_a)))
+        new_h = int(round((h * cos_a) + (w * sin_a)))
+        matrix[0, 2] += (new_w / 2.0) - center[0]
+        matrix[1, 2] += (new_h / 2.0) - center[1]
+        rotated = cv2.warpAffine(
+            arr, matrix, (new_w, new_h),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_REPLICATE
+        )
+        image = Image.fromarray(rotated, mode="RGBA")
+        face_box, _, shoulder_roll = analyzer.analyze(image)
+
+    # Level the shoulder line with a gradual vertical shear confined to the
+    # neck/body and shirt below the detected face. The face and hair region
+    # remain untouched; no face pixels are reconstructed or reshaped.
+    pose_result = analyzer._pose.process(np.asarray(image.convert("RGB")))
+    if pose_result.pose_landmarks and face_box is not None:
+        lm = pose_result.pose_landmarks.landmark
+        ls, rs = lm[11], lm[12]
+        if min(ls.visibility, rs.visibility) >= 0.55:
+            h, w = image.height, image.width
+            x1, y1 = ls.x * w, ls.y * h
+            x2, y2 = rs.x * w, rs.y * h
+            dx, dy = x2 - x1, y2 - y1
+            if abs(dx) > 1.0:
+                shoulder_angle = float(np.degrees(np.arctan2(dy, dx)))
+                # Do not apply extreme corrections to naturally sloped poses.
+                limited_angle = max(-5.0, min(5.0, shoulder_angle))
+                slope = float(np.tan(np.radians(limited_angle)))
+                if abs(limited_angle) >= 0.8:
+                    center_x = (x1 + x2) / 2.0
+                    shoulder_y = (y1 + y2) / 2.0
+                    face_bottom = float(face_box[1] + face_box[3])
+                    start_y = min(float(h - 2), max(face_bottom + 2.0, 0.0))
+                    end_y = max(start_y + 1.0, min(float(h - 1), shoulder_y))
+                    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+                    blend = np.clip((yy - start_y) / (end_y - start_y), 0.0, 1.0)
+                    map_x = xx
+                    map_y = yy + (slope * (xx - center_x) * blend).astype(np.float32)
+                    src = np.asarray(image.convert("RGBA"))
+                    leveled = cv2.remap(
+                        src, map_x, map_y, interpolation=cv2.INTER_CUBIC,
+                        borderMode=cv2.BORDER_REPLICATE
+                    )
+                    image = Image.fromarray(leveled, mode="RGBA")
+
+    # Refresh face bounds after the lower-body warp for accurate crop placement.
+    face_box, _, _ = analyzer.analyze(image)
     return image, face_box, applied
 
 
