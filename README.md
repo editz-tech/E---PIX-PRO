@@ -1,8 +1,24 @@
 # E-PIX PRO
 
-Windows passport and ID photo studio with offline and optional full generative AI processing.
+Windows passport and ID photo studio with an offline, identity-preserving portrait correction workflow.
 
-## Processing modes
+## Identity-preserving portrait workflow
+
+The default application workflow is local/offline and does not require an API key or transmit photographs to an image-generation service.
+
+- Uses face landmarks to correct modest in-plane head roll.
+- Detects the two shoulder landmarks and applies a restrained lower-torso correction below the face region.
+- Uses a wider face-relative crop (38% target face-box height) to show more upper body and shoulder area.
+- Keeps the original face content; no generative model is used to redraw facial features.
+- Background removal and white compositing use the bundled ONNX segmentation model.
+
+### Important limitations
+
+Preserving the original face means the application cannot safely synthesize a new frontal face from a true yaw/pitch angle, change facial perspective, or reconstruct unseen facial details. It can correct modest 2D roll only. Shoulder correction is geometric and depends on reliable shoulder landmarks; it cannot guarantee identical anatomical shoulder lengths for every pose. Missing body/clothing outside the source frame cannot be recreated faithfully by this offline pipeline. Review all results before official use.
+
+The former full-generative API integration is no longer part of the desktop processing UI. No API key is requested or required.
+
+
 
 ### Offline mode
 - Offline background segmentation using the bundled ONNX model
