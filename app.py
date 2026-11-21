@@ -143,14 +143,25 @@ def passport_crop(subject_rgba, face_box=None):
         fh = max(1.0, float(fh))
         face_cx = float(fx) + float(fw) / 2.0
 
-        # Match the supplied demo: keep the head noticeably smaller in the
-        # frame and retain generous space for the shoulders/upper torso.
-        # The face landmark box should occupy about 54% of output height.
-        crop_h = fh / 0.54
+        # Match the approved demo framing. A 50% face-height target gives
+        # the head more breathing room than the previous 54% setting.
+        crop_h = fh / 0.50
         crop_w = crop_h * target_ratio
         left = face_cx - crop_w / 2.0
-        # Start higher than the previous tight crop so hair is not clipped.
-        top = float(fy) - 0.40 * fh
+
+        # Anchor the top margin to the actual segmented hair silhouette,
+        # not the FaceMesh forehead boundary. This makes the white space
+        # above the hair predictable even when hairstyles vary.
+        alpha = np.asarray(rgba.getchannel("A"), dtype=np.uint8)
+        foreground_rows = np.count_nonzero(alpha > 96, axis=1)
+        min_row_pixels = max(8, int(round(src_w * 0.012)))
+        visible_rows = np.flatnonzero(foreground_rows >= min_row_pixels)
+        if visible_rows.size:
+            hair_top = float(visible_rows[0])
+            top = hair_top - (0.020 * crop_h)
+        else:
+            # Conservative fallback if the foreground mask is empty.
+            top = float(fy) - (0.45 * fh)
         crop_box = (
             int(round(left)), int(round(top)),
             int(round(left + crop_w)), int(round(top + crop_h))
@@ -183,9 +194,11 @@ def process_photo(source, destination, session, face_analyzer):
     # globally brighten or recolour the subject.
     subject_alpha = cutout.getchannel("A")
     subject_rgb = cutout.convert("RGB")
-    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.00)
-    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(1.03)
-    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(1.00)
+    # Match the demo's lighter, softer portrait tone without bleaching
+    # highlights or shifting skin strongly toward orange.
+    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.045)
+    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(0.98)
+    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(0.99)
     cutout = subject_rgb.convert("RGBA")
     cutout.putalpha(subject_alpha)
     # Use the post-straightening face position to centre the final portrait.
