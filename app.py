@@ -2,6 +2,7 @@ from __future__ import annotations
 import os, sys, traceback
 from pathlib import Path
 import cv2
+from portrait_alignment import straighten_portrait
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance, ImageChops
@@ -271,7 +272,7 @@ def process_photo(source, destination, session, face_analyzer):
     with Image.open(source) as opened:
         original = ImageOps.exif_transpose(opened).convert("RGBA")
 
-    original, face_box, roll = straighten_roll(original, face_analyzer)
+    original, face_box, roll, shoulder_angle = straighten_portrait(original, face_analyzer)
     cutout = session.remove_background(original)
     # Keep colour neutral. The earlier saturation boost made skin too orange
     # compared with the approved demo. Use restrained contrast only; do not
@@ -303,7 +304,8 @@ def process_photo(source, destination, session, face_analyzer):
         raise ValueError(f"Unsupported output format: {suffix}")
     if face_box is None:
         return "face not detected — centered fallback; retake/review recommended"
-    return f"landmark aligned; roll corrected {roll:.1f}°"
+    shoulder_status = "not detected" if shoulder_angle is None else f"residual {shoulder_angle:.1f}°"
+    return f"face roll corrected {roll:.1f}°; shoulder line {shoulder_status}"
 
 class Worker(QObject):
     progress = Signal(int, int, str)

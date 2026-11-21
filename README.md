@@ -14,9 +14,9 @@ E-PIX PRO runs its portrait workflow locally using the bundled ONNX background-s
 
 ### Face preservation limitation
 
-The offline workflow does not generatively redraw the face. It does rotate/align and crop the source image, so facial pixels can be resampled during geometric transforms and final resizing; this is not a guarantee of byte-for-byte pixel identity. It does not synthesize a new face. Review every output before official use.
+The offline workflow does not generatively redraw the face. The alignment stage uses the eye line to correct head roll first, then independently measures the two shoulder landmarks and applies a smooth lower-body correction below the jaw. The face is not locally warped by the shoulder correction. The whole-image roll rotation and final print resize do resample facial pixels, so byte-for-byte pixel identity is not guaranteed; facial identity and features are not intentionally synthesized or replaced. Review every output before official use.
 
-The offline background-removal model segments the existing subject. It does not generate missing shoulders or invent new clothing. Shoulder correction is geometric and limited; if a source photo does not contain enough shoulder/body information, the software cannot reliably reconstruct it without generative image synthesis.
+The offline background-removal model segments the existing subject. It does not generate missing shoulders or invent new clothing. Shoulder leveling is geometric and conservatively limited to avoid unnatural body distortion. If a source photo is genuinely side-facing (yaw), has an occluded shoulder, or lacks enough body pixels, this offline workflow cannot create a reliable frontal face or realistic missing clothing. Such cases should be flagged for manual review rather than silently fabricated.
 
 ## Build
 

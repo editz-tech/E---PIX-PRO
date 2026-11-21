@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "app.py"
+      - "portrait_alignment.py"
       - "ai_portrait.py"
       - "E-Pix.spec"
       - "requirements.txt"
