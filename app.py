@@ -295,15 +295,18 @@ def process_photo(source, destination, session, face_analyzer, generative_api_ke
     # globally brighten or recolour the subject.
     subject_alpha = cutout.getchannel("A")
     subject_rgb = cutout.convert("RGB")
-    # Match the demo's brighter, softer and less saturated appearance.
-    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.06)
-    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(0.96)
-    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(0.97)
+    if not ai_clothing_mode:
+        # Match the offline demo's restrained colour treatment. In AI clothing
+        # mode leave source facial colour/detail untouched by global enhancement.
+        subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.06)
+        subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(0.96)
+        subject_rgb = ImageEnhance.Color(subject_rgb).enhance(0.97)
     cutout = subject_rgb.convert("RGBA")
     cutout.putalpha(subject_alpha)
-    # Use the post-straightening face position to centre the final portrait.
+    # Use the detected face position to centre the final portrait.
     result = passport_crop(cutout, face_box)
-    result = result.filter(ImageFilter.UnsharpMask(radius=0.8, percent=85, threshold=4))
+    if not ai_clothing_mode:
+        result = result.filter(ImageFilter.UnsharpMask(radius=0.8, percent=85, threshold=4))
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
     if suffix in (".jpg", ".jpeg"):
