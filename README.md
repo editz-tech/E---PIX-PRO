@@ -9,7 +9,7 @@ The desktop workflow is local/offline. It does not request an API key or transmi
 - Uses face landmarks to correct modest in-plane head roll.
 - Detects shoulder landmarks and applies a restrained lower-torso alignment below the face region.
 - Uses a wider face-relative crop (38% target face-box height) to show more upper body and shoulder area.
-- Does not use generative AI to redraw or reconstruct facial features.
+- Does not use generative AI to redraw or reconstruct facial features. When roll correction is applied, a rigid image rotation resamples pixels, but it does not synthesize or reshape facial features.
 - Uses the bundled ONNX segmentation model for background removal and white-background compositing.
 
 ### Important limitations
