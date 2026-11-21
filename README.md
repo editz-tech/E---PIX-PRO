@@ -28,11 +28,9 @@ The current default model identifier in the source is `gpt-image-1`. Model acces
 
 ## Important identity and compliance limitations
 
-Full generative mode is NOT a pixel-preserving photo correction. It synthesizes image content and may change facial geometry, eyes, nose, mouth, skin details, hair, expression or other identity cues even when the prompt asks it to retain the same person. Exact identity preservation is not guaranteed. The output must be compared with the source and approved by a human before use.
+The API edit mask protects the head/face region, and the application composites the original source back over that protected region after generation. This prevents AI facial redraw. Final crop/resize can still resample pixels, so the exported face is not bit-for-bit identical to the source file. AI clothing correction intentionally skips geometric face straightening; a genuinely turned or tilted face remains as photographed because straightening it would alter facial pixels.
 
-Generative edits can also invent or infer shirt/shoulder regions that were not visible in the source. This may make a visually balanced image, but it does not make the generated clothing or body anatomy documentary-accurate. Do not use generated results for identity verification or official documents where altered likeness is prohibited. Users must confirm the applicable authority's rules before submission.
-
-The software should never describe a generated result as an exact or guaranteed match to the source person's face.
+AI may reconstruct missing shirt/shoulder fabric or infer unseen body areas. Review all generated clothing and shoulder anatomy carefully. Do not use generated clothing/body regions where documentary accuracy is required, and confirm the applicable authority's rules before submitting official identity documents.
 
 ## Build
 
