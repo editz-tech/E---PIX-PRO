@@ -5,7 +5,6 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance, ImageChops
-from ai_portrait import generate_portrait
 from PySide6.QtCore import QObject, Signal, QThread
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox)
 
@@ -268,52 +267,22 @@ def passport_crop(subject_rgba, face_box=None):
     canvas.alpha_composite(rgba, (0, 0))
     return canvas.convert("RGB")
 
-def process_photo(source, destination, session, face_analyzer, generative_api_key=None):
+def process_photo(source, destination, session, face_analyzer, local_correction=True):
     with Image.open(source) as opened:
         original = ImageOps.exif_transpose(opened).convert("RGBA")
 
-    # Full generative mode intentionally regenerates the whole portrait.
-    # It can improve pose/clothing/framing, but cannot guarantee exact identity.
-    if generative_api_key:
-        generated = generate_portrait(original.convert("RGB"), generative_api_key)
-        generated_rgba = generated.convert("RGBA")
-        generated_face_box, _, _ = face_analyzer.analyze(generated_rgba)
-        result = passport_crop(generated_rgba, generated_face_box)
-        result = result.filter(ImageFilter.UnsharpMask(radius=0.7, percent=65, threshold=4))
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        suffix = destination.suffix.lower()
-        if suffix in (".jpg", ".jpeg"):
-            result.save(destination, "JPEG", quality=96, dpi=DPI, optimize=True)
-        elif suffix == ".png":
-            result.save(destination, "PNG", dpi=DPI, optimize=True)
-        elif suffix in (".tif", ".tiff"):
-            result.save(destination, "TIFF", dpi=DPI, compression="tiff_lzw")
-        elif suffix == ".bmp":
-            result.save(destination, "BMP", dpi=DPI)
-        elif suffix == ".webp":
-            result.save(destination, "WEBP", quality=96, method=6)
-        else:
-            raise ValueError(f"Unsupported output format: {suffix}")
-        if generated_face_box is None:
-            return "GENERATIVE AI output — face not detected; manual review required"
-        return "GENERATIVE AI output — regenerated portrait; identity must be manually verified"
+    # All processing stays on this computer. MediaPipe estimates the eye line
+    # and shoulder landmarks; OpenCV levels the head and gently corrects the
+    # lower shoulder/body region. No remote image API or face-generating model.
+    if local_correction:
+        original, face_box, roll = straighten_roll(original, face_analyzer)
+    else:
+        face_box, _, _ = face_analyzer.analyze(original)
 
-    original, face_box, roll = straighten_roll(original, face_analyzer)
     cutout = session.remove_background(original)
-    # Keep colour neutral. The earlier saturation boost made skin too orange
-    # compared with the approved demo. Use restrained contrast only; do not
-    # globally brighten or recolour the subject.
-    subject_alpha = cutout.getchannel("A")
-    subject_rgb = cutout.convert("RGB")
-    # Match the demo's brighter, softer and less saturated appearance.
-    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.06)
-    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(0.96)
-    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(0.97)
-    cutout = subject_rgb.convert("RGBA")
-    cutout.putalpha(subject_alpha)
-    # Use the post-straightening face position to centre the final portrait.
+    # Do not apply global brightness, contrast, colour or sharpening filters:
+    # retain the source face appearance as closely as possible.
     result = passport_crop(cutout, face_box)
-    result = result.filter(ImageFilter.UnsharpMask(radius=0.8, percent=85, threshold=4))
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
     if suffix in (".jpg", ".jpeg"):
@@ -330,31 +299,31 @@ def process_photo(source, destination, session, face_analyzer, generative_api_ke
         raise ValueError(f"Unsupported output format: {suffix}")
     if face_box is None:
         return "face not detected — centered fallback; retake/review recommended"
-    return f"landmark aligned; roll corrected {roll:.1f}°"
+    return f"local landmark alignment; head roll corrected {roll:.1f}°" if local_correction else "local background removal and framing"
+
 
 class Worker(QObject):
     progress = Signal(int, int, str)
     done = Signal(int, int)
     failed = Signal(str)
-    def __init__(self, files, output, generative_api_key=None):
+    def __init__(self, files, output, local_correction=True):
         super().__init__(); self.files, self.output = files, output
-        self.generative_api_key = generative_api_key
+        self.local_correction = local_correction
     def run(self):
         try:
-            session = None
-            if not self.generative_api_key:
-                model_dir = resource_path("models")
-                os.environ["U2NET_HOME"] = str(model_dir)
-                model = model_dir / "u2net.onnx"
-                if not model.exists():
-                    raise RuntimeError("Offline AI model missing. Reinstall the application.")
-                session = U2NetSession(model)
+            model_dir = resource_path("models")
+            os.environ["U2NET_HOME"] = str(model_dir)
+            model = model_dir / "u2net.onnx"
+            if not model.exists():
+                raise RuntimeError("Offline background-removal model missing. Reinstall the application.")
+            # Background removal is still local/offline in both processing modes.
+            session = U2NetSession(model)
             face_analyzer = FaceAnalyzer()
             ok = errors = 0
             for i, src in enumerate(self.files, 1):
                 try:
                     target = output_path_for(src, self.output)
-                    framing = process_photo(src, target, session, face_analyzer, self.generative_api_key); ok += 1
+                    framing = process_photo(src, target, session, face_analyzer, self.local_correction); ok += 1
                     self.progress.emit(i, len(self.files), f"Saved ({framing}): {src.name} → {target.name}")
                 except Exception as exc:
                     errors += 1; self.progress.emit(i, len(self.files), f"FAILED: {src.name}: {exc}")
@@ -379,23 +348,16 @@ class MainWindow(QMainWindow):
         browse = QPushButton("Browse"); browse.clicked.connect(self.choose_output)
         outrow.addWidget(self.output); outrow.addWidget(browse); layout.addWidget(outbox)
         self.preserve = QCheckBox("Preserve original filename (required)"); self.preserve.setChecked(True); self.preserve.setEnabled(False); layout.addWidget(self.preserve)
-        self.generative = QCheckBox("Use FULL GENERATIVE AI portrait mode (changes the whole image)")
-        self.generative.setChecked(True)
-        layout.addWidget(self.generative)
-        apirow = QHBoxLayout()
-        apirow.addWidget(QLabel("OpenAI API key:"))
-        self.api_key = QLineEdit()
-        self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key.setPlaceholderText("Paste API key — used for this run only; not saved")
-        apirow.addWidget(self.api_key)
-        layout.addLayout(apirow)
+        self.local_correction = QCheckBox("Offline AI-assisted face & shoulder alignment (no API key)")
+        self.local_correction.setChecked(True)
+        layout.addWidget(self.local_correction)
         self.start = QPushButton("START PROCESSING"); self.start.setMinimumHeight(48)
         self.start.setStyleSheet("background:#1769aa;color:white;font-weight:700;border-radius:7px;")
         self.start.clicked.connect(self.start_processing); layout.addWidget(self.start)
         self.progress = QProgressBar(); layout.addWidget(self.progress)
         self.status = QLabel("Ready • Original photos are never modified."); layout.addWidget(self.status)
         self.log = QTextEdit(); self.log.setReadOnly(True); layout.addWidget(self.log)
-        note = QLabel("FULL GENERATIVE AI mode sends each original photo to the configured image-edit API and regenerates the complete portrait. Face identity and facial details may change; exact identity preservation is NOT guaranteed. Use only with consent, review every result, and verify the issuing authority rules. Uncheck generative mode to use the offline face-preserving workflow.")
+        note = QLabel("Runs locally using the bundled U2Net ONNX model, MediaPipe face/pose landmarks and OpenCV. No API key, cloud upload or runtime internet is used. The software aligns the face and shoulders and removes the background; it does not invent missing shirt fabric. Final rotation/crop/resize can resample facial pixels. Review every result and verify the issuing authority rules.")
         note.setWordWrap(True); note.setStyleSheet("color:#e3b341;"); layout.addWidget(note)
         self.setStyleSheet("""
             QMainWindow, QWidget {
@@ -476,14 +438,9 @@ class MainWindow(QMainWindow):
         if d: self.output.setText(d)
     def start_processing(self):
         if not self.files: QMessageBox.warning(self,"No photos","Choose one or more photos first."); return
-        use_gen = self.generative.isChecked()
-        api_key = self.api_key.text().strip() if use_gen else None
-        if use_gen and not api_key:
-            QMessageBox.warning(self, "API key required",
-                "Full Generative AI mode requires an API key. Paste your key, or uncheck generative mode to use offline processing.")
-            return
+        local_correction = self.local_correction.isChecked()
         self.start.setEnabled(False); self.progress.setValue(0); self.log.clear()
-        self.thread = QThread(); self.worker = Worker(self.files, Path(self.output.text()).expanduser(), api_key)
+        self.thread = QThread(); self.worker = Worker(self.files, Path(self.output.text()).expanduser(), local_correction)
         self.worker.moveToThread(self.thread); self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.on_progress); self.worker.done.connect(self.on_done); self.worker.failed.connect(self.on_failed)
         self.worker.done.connect(self.thread.quit); self.worker.failed.connect(self.thread.quit)

@@ -2,11 +2,12 @@ name: Build E-PIX PRO portable version
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     paths:
       - "app.py"
-      - "ai_portrait.py"
       - "E-Pix.spec"
       - "requirements.txt"
       - "scripts/**"
