@@ -1,6 +1,6 @@
 # E-PIX PRO
 
-Windows passport and ID photo studio with offline and optional full generative AI processing.
+Windows passport and ID photo studio with offline processing and optional face-protected AI clothing/shoulder correction.
 
 ## Processing modes
 
@@ -11,15 +11,15 @@ Windows passport and ID photo studio with offline and optional full generative A
 - No generative face reconstruction
 
 ### AI-assisted clothing and shoulder correction (face-protected)
-- Sends the selected original photograph to an image-edit API.
-- Regenerates the complete portrait to aim for a straight frontal view, level shoulders, balanced margins, complete shirt/shoulder silhouette, white background and 35:45 framing.
-- The generated result is then face-detected and cropped to the application's output dimensions.
-- This mode requires internet access and a valid API key. The key is entered in the app for the current run and is not saved by the application.
-- The image is transmitted to the configured API provider for processing. Do not use this mode unless the person has consented and the provider's data handling terms are acceptable.
+- Sends the selected original photograph and a protected-region edit mask to the image-edit API.
+- Only lower clothing and shoulder regions are eligible for generative reconstruction; the head/face region is protected by the mask and restored locally from the source after the API response.
+- The mode can rebuild missing shirt corners and balance the visible shoulder silhouette. It does not rotate or reshape the face.
+- Requires internet access and a valid API key. The key is entered for the current run and is not saved by the application.
+- The image is transmitted to the configured API provider. Obtain consent and review the provider's data-handling terms before use.
 
 ## API configuration
 
-The UI uses the default image-edit endpoint and model configured in `ai_portrait.py`. They can be overridden with environment variables:
+The UI uses the default image-edit endpoint and model configured in `ai_clothing.py`. They can be overridden with environment variables:
 
 - `EPIX_IMAGE_API_URL`: full image-edit endpoint URL
 - `EPIX_IMAGE_MODEL`: image model identifier supported by the API account
@@ -36,7 +36,7 @@ The software should never describe a generated result as an exact or guaranteed 
 
 ## Build
 
-Install dependencies from `requirements.txt`. Package `app.py`, `ai_portrait.py`, and the `models/u2net.onnx` asset with the Windows application. Generative mode also requires internet access and an API key at runtime.
+Install dependencies from `requirements.txt`. Package `app.py`, `ai_clothing.py`, and the `models/u2net.onnx` asset with the Windows application. AI clothing/shoulder mode also requires internet access and an API key at runtime.
 
 
 ## Portable Windows distribution and download safety
