@@ -1,0 +1,38 @@
+name: Test portrait alignment
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+    paths:
+      - "app.py"
+      - "portrait_alignment.py"
+      - "tests/**"
+      - ".github/workflows/test-alignment.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "app.py"
+      - "portrait_alignment.py"
+      - "tests/**"
+      - ".github/workflows/test-alignment.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  alignment-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install geometry test dependencies
+        run: python -m pip install numpy==1.26.4 Pillow==11.1.0 opencv-python-headless==4.10.0.84
+      - name: Compile application and alignment module
+        run: python -m py_compile app.py portrait_alignment.py
+      - name: Run portrait alignment regression tests
+        run: python -m unittest discover -s tests -v
