@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance, ImageChops
-from ai_portrait import generate_portrait
+from ai_clothing import correct_clothing_shoulders
 from PySide6.QtCore import QObject, Signal, QThread
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox)
 
@@ -272,31 +272,15 @@ def process_photo(source, destination, session, face_analyzer, generative_api_ke
     with Image.open(source) as opened:
         original = ImageOps.exif_transpose(opened).convert("RGBA")
 
-    # Full generative mode intentionally regenerates the whole portrait.
-    # It can improve pose/clothing/framing, but cannot guarantee exact identity.
+    # Option 1: AI edits only the lower clothing/shoulder area. The source
+    # face/head region is protected by an API mask and composited back locally.
     if generative_api_key:
-        generated = generate_portrait(original.convert("RGB"), generative_api_key)
-        generated_rgba = generated.convert("RGBA")
-        generated_face_box, _, _ = face_analyzer.analyze(generated_rgba)
-        result = passport_crop(generated_rgba, generated_face_box)
-        result = result.filter(ImageFilter.UnsharpMask(radius=0.7, percent=65, threshold=4))
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        suffix = destination.suffix.lower()
-        if suffix in (".jpg", ".jpeg"):
-            result.save(destination, "JPEG", quality=96, dpi=DPI, optimize=True)
-        elif suffix == ".png":
-            result.save(destination, "PNG", dpi=DPI, optimize=True)
-        elif suffix in (".tif", ".tiff"):
-            result.save(destination, "TIFF", dpi=DPI, compression="tiff_lzw")
-        elif suffix == ".bmp":
-            result.save(destination, "BMP", dpi=DPI)
-        elif suffix == ".webp":
-            result.save(destination, "WEBP", quality=96, method=6)
-        else:
-            raise ValueError(f"Unsupported output format: {suffix}")
-        if generated_face_box is None:
-            return "GENERATIVE AI output — face not detected; manual review required"
-        return "GENERATIVE AI output — regenerated portrait; identity must be manually verified"
+        source_rgb = original.convert("RGB")
+        source_face_box, _, _ = face_analyzer.analyze(source_rgb)
+        corrected = correct_clothing_shoulders(
+            source_rgb, generative_api_key, source_face_box
+        )
+        original = corrected.convert("RGBA")
 
     original, face_box, roll = straighten_roll(original, face_analyzer)
     cutout = session.remove_background(original)
@@ -379,7 +363,7 @@ class MainWindow(QMainWindow):
         browse = QPushButton("Browse"); browse.clicked.connect(self.choose_output)
         outrow.addWidget(self.output); outrow.addWidget(browse); layout.addWidget(outbox)
         self.preserve = QCheckBox("Preserve original filename (required)"); self.preserve.setChecked(True); self.preserve.setEnabled(False); layout.addWidget(self.preserve)
-        self.generative = QCheckBox("Use FULL GENERATIVE AI portrait mode (changes the whole image)")
+        self.generative = QCheckBox("AI-assisted clothing & shoulder correction (protect original face)")
         self.generative.setChecked(True)
         layout.addWidget(self.generative)
         apirow = QHBoxLayout()
@@ -395,7 +379,7 @@ class MainWindow(QMainWindow):
         self.progress = QProgressBar(); layout.addWidget(self.progress)
         self.status = QLabel("Ready • Original photos are never modified."); layout.addWidget(self.status)
         self.log = QTextEdit(); self.log.setReadOnly(True); layout.addWidget(self.log)
-        note = QLabel("FULL GENERATIVE AI mode sends each original photo to the configured image-edit API and regenerates the complete portrait. Face identity and facial details may change; exact identity preservation is NOT guaranteed. Use only with consent, review every result, and verify the issuing authority rules. Uncheck generative mode to use the offline face-preserving workflow.")
+        note = QLabel("AI clothing/shoulder mode sends the photo and a protected-region mask to the configured image-edit API. Only the lower clothing/shoulder area is editable; the original face/head region is restored locally. Final crop/resize can resample pixels, so this is not a bit-for-bit pixel guarantee. Review every result and verify the issuing authority rules. Uncheck this option for fully offline processing.")
         note.setWordWrap(True); note.setStyleSheet("color:#e3b341;"); layout.addWidget(note)
         self.setStyleSheet("""
             QMainWindow, QWidget {
@@ -480,7 +464,7 @@ class MainWindow(QMainWindow):
         api_key = self.api_key.text().strip() if use_gen else None
         if use_gen and not api_key:
             QMessageBox.warning(self, "API key required",
-                "Full Generative AI mode requires an API key. Paste your key, or uncheck generative mode to use offline processing.")
+                "AI clothing/shoulder correction requires an API key. Paste your key, or uncheck the option to use offline processing.")
             return
         self.start.setEnabled(False); self.progress.setValue(0); self.log.clear()
         self.thread = QThread(); self.worker = Worker(self.files, Path(self.output.text()).expanduser(), api_key)
