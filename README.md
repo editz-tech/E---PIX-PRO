@@ -10,7 +10,7 @@ Windows passport and ID photo studio with offline and optional full generative A
 - Face-landmark framing and restrained geometric correction
 - No generative face reconstruction
 
-### Full Generative AI mode
+### AI-assisted clothing and shoulder correction (face-protected)
 - Sends the selected original photograph to an image-edit API.
 - Regenerates the complete portrait to aim for a straight frontal view, level shoulders, balanced margins, complete shirt/shoulder silhouette, white background and 35:45 framing.
 - The generated result is then face-detected and cropped to the application's output dimensions.
