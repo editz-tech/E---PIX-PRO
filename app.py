@@ -228,7 +228,7 @@ def passport_crop(subject_rgba, face_box=None):
 
         # Match the approved demo framing: include more hair, both sides of
         # the head, shoulders and upper chest. Target a smaller face at 45%.
-        FACE_HEIGHT_TARGET = 0.39
+        FACE_HEIGHT_TARGET = 0.34
         TOP_WHITE_MARGIN = 0.022
         crop_h = fh / FACE_HEIGHT_TARGET
         crop_w = crop_h * target_ratio
@@ -246,6 +246,11 @@ def passport_crop(subject_rgba, face_box=None):
         else:
             # Conservative fallback if the foreground mask is empty.
             top = float(fy) - (0.45 * fh)
+        # Prevent PIL from padding a crop that extends below the source.
+        # Such transparent padding was composited as the white band at the
+        # bottom of the finished ID photo. Shift the crop upward instead;
+        # a negative top intentionally adds clean white headroom.
+        top = min(top, float(src_h) - crop_h)
         crop_box = (
             int(round(left)), int(round(top)),
             int(round(left + crop_w)), int(round(top + crop_h))
@@ -287,7 +292,7 @@ def process_photo(source, destination, session, face_analyzer):
     cutout.putalpha(subject_alpha)
     # Use the post-straightening face position to centre the final portrait.
     result = passport_crop(cutout, face_box)
-    result = result.filter(ImageFilter.UnsharpMask(radius=0.8, percent=85, threshold=4))
+    result = result.filter(ImageFilter.UnsharpMask(radius=0.9, percent=105, threshold=3))
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
     if suffix in (".jpg", ".jpeg"):
