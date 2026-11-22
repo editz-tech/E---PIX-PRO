@@ -226,10 +226,12 @@ def passport_crop(subject_rgba, face_box=None):
         fh = max(1.0, float(fh))
         face_cx = float(fx) + float(fw) / 2.0
 
-        # Match the approved demo framing: include more hair, both sides of
-        # the head, shoulders and upper chest. Target a smaller face at 45%.
-        FACE_HEIGHT_TARGET = 0.34
-        TOP_WHITE_MARGIN = 0.022
+        # Match the approved reference framing consistently across batch jobs:
+        # a larger, clearly readable head; visible hairline/headroom; balanced
+        # side space around the head; and shoulders/upper chest retained below.
+        # The prior 0.34 value made faces noticeably too small in the final frame.
+        FACE_HEIGHT_TARGET = 0.45
+        TOP_WHITE_MARGIN = 0.025
         crop_h = fh / FACE_HEIGHT_TARGET
         crop_w = crop_h * target_ratio
         left = face_cx - crop_w / 2.0
