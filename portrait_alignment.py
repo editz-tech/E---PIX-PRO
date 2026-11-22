@@ -13,7 +13,7 @@ from PIL import Image
 
 MAX_FACE_ROLL_DEGREES = 12.0
 MAX_SHOULDER_CORRECTION_DEGREES = 10.0
-SHOULDER_RESIDUAL_TOLERANCE = 1.0
+SHOULDER_RESIDUAL_TOLERANCE = 0.8
 
 
 def _rotate_expand(image: Image.Image, angle_degrees: float) -> Image.Image:
@@ -58,7 +58,7 @@ def _normalized_line_angle(p1, p2):
     return ((angle + 90.0) % 180.0) - 90.0
 
 
-def _level_shoulders_below_face(image, analyzer, face_box, max_step=6.0):
+def _level_shoulders_below_face(image, analyzer, face_box, max_step=MAX_SHOULDER_CORRECTION_DEGREES):
     """Apply a smooth lower-body shear while excluding the face and hair."""
     points = _shoulder_points(analyzer, image)
     if points is None or face_box is None:
@@ -121,9 +121,9 @@ def straighten_portrait(image: Image.Image, analyzer):
     final_shoulder_angle = None
     # Several small, re-measured passes handle landmark movement after each
     # transform without applying one extreme, visually damaging warp.
-    for _ in range(4):
+    for _ in range(5):
         image, measured = _level_shoulders_below_face(
-            image, analyzer, face_box, max_step=6.0
+            image, analyzer, face_box, max_step=MAX_SHOULDER_CORRECTION_DEGREES
         )
         if measured is None:
             final_shoulder_angle = None
