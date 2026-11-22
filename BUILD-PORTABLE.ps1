@@ -1,5 +1,6 @@
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+# Built by the repository's pull-request portable validation workflow when enabled.
 
 function Invoke-Step([string]$Name, [scriptblock]$Action) {
     Write-Host ""
