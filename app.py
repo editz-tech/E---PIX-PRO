@@ -228,7 +228,7 @@ def passport_crop(subject_rgba, face_box=None):
 
         # Match the approved demo framing: include more hair, both sides of
         # the head, shoulders and upper chest. Target a smaller face at 45%.
-        FACE_HEIGHT_TARGET = 0.42
+        FACE_HEIGHT_TARGET = 0.39
         TOP_WHITE_MARGIN = 0.022
         crop_h = fh / FACE_HEIGHT_TARGET
         crop_w = crop_h * target_ratio
@@ -304,8 +304,9 @@ def process_photo(source, destination, session, face_analyzer):
         raise ValueError(f"Unsupported output format: {suffix}")
     if face_box is None:
         return "face not detected — centered fallback; retake/review recommended"
-    shoulder_status = "not detected" if shoulder_angle is None else f"residual {shoulder_angle:.1f}°"
-    return f"face roll corrected {roll:.1f}°; shoulder line {shoulder_status}"
+    shoulder_status = "not detected — manual review required" if shoulder_angle is None else f"residual {shoulder_angle:.1f}°"
+    review = " • REVIEW: shoulder line may still be uneven" if shoulder_angle is None or abs(shoulder_angle) > 2.0 else ""
+    return f"face roll corrected {roll:.1f}°; shoulder line {shoulder_status}{review}"
 
 class Worker(QObject):
     progress = Signal(int, int, str)
