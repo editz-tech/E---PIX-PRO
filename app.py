@@ -299,7 +299,27 @@ def passport_crop(subject_rgba, face_box=None):
     canvas.alpha_composite(rgba, (0, 0))
     return canvas.convert("RGB")
 
-def process_photo(source, destination, session, face_analyzer):
+def apply_lighting_tone(image, mode="Auto balanced"):
+    """Gentle per-photo exposure and tone normalization; preserve skin identity."""
+    rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
+    lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+    l = lab[:, :, 0].astype(np.float32)
+    if mode == "Soft":
+        target_mid, contrast = 138.0, 1.035
+    elif mode == "Bright":
+        target_mid, contrast = 148.0, 1.045
+    else:  # Auto balanced: adapt exposure gently to each image
+        target_mid, contrast = 143.0, 1.055
+    # Use robust luminance percentiles so isolated highlights do not drive exposure.
+    p45 = float(np.percentile(l, 45))
+    shift = float(np.clip(target_mid - p45, -9.0, 12.0))
+    l = (l - 128.0) * contrast + 128.0 + shift
+    lab[:, :, 0] = np.clip(l, 0, 255).astype(np.uint8)
+    corrected = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+    return Image.fromarray(corrected, "RGB")
+
+
+def process_photo(source, destination, session, face_analyzer, lighting_mode="Auto balanced"):
     with Image.open(source) as opened:
         original = ImageOps.exif_transpose(opened).convert("RGBA")
 
@@ -310,11 +330,10 @@ def process_photo(source, destination, session, face_analyzer):
     # globally brighten or recolour the subject.
     subject_alpha = cutout.getchannel("A")
     subject_rgb = cutout.convert("RGB")
-    # Match the demo's brighter, softer and less saturated appearance.
-    subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.06)
-    # Add a modest contrast lift while preserving natural skin tones and texture.
-    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(1.08)
-    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(0.97)
+    # Apply per-photo lighting normalization selected by the user.
+    subject_rgb = apply_lighting_tone(subject_rgb, lighting_mode)
+    # Small saturation restraint avoids orange skin while retaining natural colour.
+    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(0.99)
     cutout = subject_rgb.convert("RGBA")
     cutout.putalpha(subject_alpha)
     # Use the post-straightening face position to centre the final portrait.
@@ -344,9 +363,9 @@ class Worker(QObject):
     progress = Signal(int, int, str)
     done = Signal(int, int)
     failed = Signal(str)
-    def __init__(self, files, output):
+    def __init__(self, files, output, lighting_mode="Auto balanced"):
         super().__init__()
-        self.files, self.output = files, output
+        self.files, self.output, self.lighting_mode = files, output, lighting_mode
     def run(self):
         try:
             model_dir = resource_path("models")
@@ -360,7 +379,7 @@ class Worker(QObject):
             for i, src in enumerate(self.files, 1):
                 try:
                     target = output_path_for(src, self.output)
-                    framing = process_photo(src, target, session, face_analyzer); ok += 1
+                    framing = process_photo(src, target, session, face_analyzer, self.lighting_mode); ok += 1
                     self.progress.emit(i, len(self.files), f"Saved ({framing}): {src.name} → {target.name}")
                 except Exception as exc:
                     errors += 1; self.progress.emit(i, len(self.files), f"FAILED: {src.name}: {exc}")
@@ -385,6 +404,15 @@ class MainWindow(QMainWindow):
         browse = QPushButton("Browse"); browse.clicked.connect(self.choose_output)
         outrow.addWidget(self.output); outrow.addWidget(browse); layout.addWidget(outbox)
         self.preserve = QCheckBox("Preserve original filename (required)"); self.preserve.setChecked(True); self.preserve.setEnabled(False); layout.addWidget(self.preserve)
+        lighting_box = QGroupBox("3. Lighting & skin tone")
+        lighting_row = QHBoxLayout(lighting_box)
+        lighting_row.addWidget(QLabel("Correction preset:"))
+        self.lighting = QComboBox()
+        self.lighting.addItems(["Auto balanced", "Soft", "Bright"])
+        self.lighting.setToolTip("Applies gentle per-photo exposure and contrast normalization.")
+        lighting_row.addWidget(self.lighting)
+        lighting_row.addWidget(QLabel("Auto balanced is recommended for mixed lighting batches."))
+        layout.addWidget(lighting_box)
         self.start = QPushButton("START PROCESSING"); self.start.setMinimumHeight(48)
         self.start.setStyleSheet("background:#1769aa;color:white;font-weight:700;border-radius:7px;")
         self.start.clicked.connect(self.start_processing); layout.addWidget(self.start)
@@ -473,7 +501,7 @@ class MainWindow(QMainWindow):
     def start_processing(self):
         if not self.files: QMessageBox.warning(self,"No photos","Choose one or more photos first."); return
         self.start.setEnabled(False); self.progress.setValue(0); self.log.clear()
-        self.thread = QThread(); self.worker = Worker(self.files, Path(self.output.text()).expanduser())
+        self.thread = QThread(); self.worker = Worker(self.files, Path(self.output.text()).expanduser(), self.lighting.currentText())
         self.worker.moveToThread(self.thread); self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.on_progress); self.worker.done.connect(self.on_done); self.worker.failed.connect(self.on_failed)
         self.worker.done.connect(self.thread.quit); self.worker.failed.connect(self.thread.quit)
