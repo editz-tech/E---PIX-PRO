@@ -312,7 +312,8 @@ def process_photo(source, destination, session, face_analyzer):
     subject_rgb = cutout.convert("RGB")
     # Match the demo's brighter, softer and less saturated appearance.
     subject_rgb = ImageEnhance.Brightness(subject_rgb).enhance(1.06)
-    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(0.96)
+    # Add a modest contrast lift while preserving natural skin tones and texture.
+    subject_rgb = ImageEnhance.Contrast(subject_rgb).enhance(1.08)
     subject_rgb = ImageEnhance.Color(subject_rgb).enhance(0.97)
     cutout = subject_rgb.convert("RGBA")
     cutout.putalpha(subject_alpha)
