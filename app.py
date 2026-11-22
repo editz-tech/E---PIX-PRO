@@ -43,7 +43,10 @@ class U2NetSession:
         # U2NETP emits a foreground confidence map; apply a gentle confidence
         # remap and smoothstep to suppress low-confidence grey fringes.
         mask = np.clip(prediction, 0.0, 1.0)
-        lo, hi = 0.06, 0.78
+        # Raise the low-confidence cutoff slightly to suppress weak grey
+        # edge haze and cast-shadow fragments around ears/hair. Keep a soft
+        # transition so genuine fine hair is not converted to a hard cutout.
+        lo, hi = 0.10, 0.80
         mask = np.clip((mask - lo) / (hi - lo), 0.0, 1.0)
         mask = mask * mask * (3.0 - 2.0 * mask)
         mask_image = Image.fromarray(np.uint8(mask * 255), mode="L")
@@ -122,6 +125,27 @@ class FaceAnalyzer:
                 # Normalize the line direction to the horizontal range.
                 shoulder_roll = ((angle + 90.0) % 180.0) - 90.0
         return face_box, face_roll, shoulder_roll
+
+    def mouth_open_ratio(self, image):
+        """Estimate mouth opening from FaceMesh inner-lip and corner landmarks.
+
+        This is a review signal only. The application never synthesizes or
+        reshapes lips to force a closed-mouth expression.
+        """
+        rgb = np.asarray(image.convert("RGB"))
+        result = self._mesh.process(rgb)
+        if not result.multi_face_landmarks:
+            return None
+        points = result.multi_face_landmarks[0].landmark
+        height, width = rgb.shape[:2]
+        upper = np.array([points[13].x * width, points[13].y * height], dtype=np.float32)
+        lower = np.array([points[14].x * width, points[14].y * height], dtype=np.float32)
+        left = np.array([points[78].x * width, points[78].y * height], dtype=np.float32)
+        right = np.array([points[308].x * width, points[308].y * height], dtype=np.float32)
+        mouth_width = float(np.linalg.norm(right - left))
+        if mouth_width < 1.0:
+            return None
+        return float(np.linalg.norm(lower - upper) / mouth_width)
 
     def close(self):
         self._mesh.close()
@@ -323,6 +347,9 @@ def process_photo(source, destination, session, face_analyzer, lighting_mode="Au
     with Image.open(source) as opened:
         original = ImageOps.exif_transpose(opened).convert("RGBA")
 
+    # Detect expression before geometric alignment. This is a quality-control
+    # flag only; do not alter the person's mouth or facial expression.
+    mouth_ratio = face_analyzer.mouth_open_ratio(original)
     original, face_box, roll, shoulder_angle = straighten_portrait(original, face_analyzer)
     cutout = session.remove_background(original)
     # Keep colour neutral. The earlier saturation boost made skin too orange
@@ -356,7 +383,14 @@ def process_photo(source, destination, session, face_analyzer, lighting_mode="Au
     if face_box is None:
         return "face not detected — centered fallback; retake/review recommended"
     shoulder_status = "not detected — manual review required" if shoulder_angle is None else f"residual {shoulder_angle:.1f}°"
-    review = " • REVIEW: shoulder line may still be uneven" if shoulder_angle is None or abs(shoulder_angle) > 2.0 else ""
+    review_items = []
+    if shoulder_angle is None or abs(shoulder_angle) > 2.0:
+        review_items.append("shoulder line may still be uneven")
+    if mouth_ratio is None:
+        review_items.append("mouth not detected — review expression")
+    elif mouth_ratio >= 0.045:
+        review_items.append(f"mouth may be open (ratio {mouth_ratio:.3f}) — retake/review; expression was not altered")
+    review = " • REVIEW: " + "; ".join(review_items) if review_items else ""
     return f"face roll corrected {roll:.1f}°; shoulder line {shoulder_status}{review}"
 
 class Worker(QObject):
