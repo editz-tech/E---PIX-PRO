@@ -1,3 +1,4 @@
+# Unsigned portable release: no code-signing certificate is required.
 name: Build E-PIX PRO portable version
 
 on:
