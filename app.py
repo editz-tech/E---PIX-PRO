@@ -259,16 +259,40 @@ def passport_crop(subject_rgba, face_box=None):
         )
         rgba = rgba.crop(crop_box)
     else:
-        # Safe fallback when landmarks cannot be detected: centre a ratio crop.
-        source_ratio = src_w / max(1, src_h)
-        if source_ratio > target_ratio:
-            crop_w = max(1, int(round(src_h * target_ratio)))
-            left = (src_w - crop_w) // 2
-            rgba = rgba.crop((left, 0, left + crop_w, src_h))
-        elif source_ratio < target_ratio:
-            crop_h = max(1, int(round(src_w / target_ratio)))
-            top = max(0, (src_h - crop_h) // 2)
-            rgba = rgba.crop((0, top, src_w, top + crop_h))
+        # Landmark fallback: use the AI foreground mask to remove excess
+        # blank space above the hair before making the 35:45 crop. The old
+        # centre-crop fallback preserved the camera's original head position;
+        # this left some batch outputs with 15–25% empty space above the head.
+        alpha = np.asarray(rgba.getchannel("A"), dtype=np.uint8)
+        foreground_rows = np.count_nonzero(alpha > 48, axis=1)
+        min_row_pixels = max(4, int(round(src_w * 0.0045)))
+        visible_rows = np.flatnonzero(foreground_rows >= min_row_pixels)
+        if visible_rows.size:
+            hair_top = int(visible_rows[0])
+            top = max(0, int(round(hair_top - (0.025 * src_h))))
+            crop_h = max(1, src_h - top)
+            crop_w = max(1, int(round(crop_h * target_ratio)))
+            if crop_w <= src_w:
+                # Keep the face centred and preserve a balanced amount of
+                # space on both sides; the lower shoulders may naturally
+                # reach the frame edges, as in the supplied reference.
+                left = (src_w - crop_w) // 2
+                rgba = rgba.crop((left, top, left + crop_w, src_h))
+            else:
+                crop_h = max(1, int(round(src_w / target_ratio)))
+                crop_top = max(0, src_h - crop_h)
+                rgba = rgba.crop((0, crop_top, src_w, crop_top + crop_h))
+        else:
+            # Empty/invalid mask: retain a safe centred ratio crop.
+            source_ratio = src_w / max(1, src_h)
+            if source_ratio > target_ratio:
+                crop_w = max(1, int(round(src_h * target_ratio)))
+                left = (src_w - crop_w) // 2
+                rgba = rgba.crop((left, 0, left + crop_w, src_h))
+            elif source_ratio < target_ratio:
+                crop_h = max(1, int(round(src_w / target_ratio)))
+                top = max(0, (src_h - crop_h) // 2)
+                rgba = rgba.crop((0, top, src_w, top + crop_h))
 
     rgba = rgba.resize(OUTPUT_SIZE, Image.Resampling.LANCZOS)
     canvas = Image.new("RGBA", OUTPUT_SIZE, (255, 255, 255, 255))
