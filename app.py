@@ -246,11 +246,11 @@ def passport_crop(subject_rgba, face_box=None):
         else:
             # Conservative fallback if the foreground mask is empty.
             top = float(fy) - (0.45 * fh)
-        # Prevent PIL from padding a crop that extends below the source.
-        # Such transparent padding was composited as the white band at the
-        # bottom of the finished ID photo. Shift the crop upward instead;
-        # a negative top intentionally adds clean white headroom.
-        top = min(top, float(src_h) - crop_h)
+        # Use the last substantial foreground row as the lower boundary.
+        # This removes both out-of-bounds transparent padding and an existing
+        # blank white strip at the bottom of the source cutout.
+        content_bottom = float(visible_rows[-1] + 1) if visible_rows.size else float(src_h)
+        top = min(top, content_bottom - crop_h)
         crop_box = (
             int(round(left)), int(round(top)),
             int(round(left + crop_w)), int(round(top + crop_h))
