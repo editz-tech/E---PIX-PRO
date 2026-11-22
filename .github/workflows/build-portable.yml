@@ -3,6 +3,19 @@ name: Build E-PIX PRO portable version
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app.py"
+      - "portrait_alignment.py"
+      - "ai_portrait.py"
+      - "E-Pix.spec"
+      - "requirements.txt"
+      - "scripts/**"
+      - "README.md"
+      - "BUILD-PORTABLE.ps1"
+      - "BUILD-PORTABLE.bat"
+      - ".github/workflows/build-portable.yml"
   push:
     branches: [main]
     paths:
