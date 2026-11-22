@@ -12,7 +12,7 @@ from PIL import Image
 
 
 MAX_FACE_ROLL_DEGREES = 12.0
-MAX_SHOULDER_CORRECTION_DEGREES = 10.0
+MAX_SHOULDER_CORRECTION_DEGREES = 5.0
 SHOULDER_RESIDUAL_TOLERANCE = 0.8
 
 
@@ -119,19 +119,14 @@ def straighten_portrait(image: Image.Image, analyzer):
         face_box, _, _ = analyzer.analyze(image)
 
     final_shoulder_angle = None
-    # Several small, re-measured passes handle landmark movement after each
-    # transform without applying one extreme, visually damaging warp.
-    for _ in range(5):
-        image, measured = _level_shoulders_below_face(
-            image, analyzer, face_box, max_step=MAX_SHOULDER_CORRECTION_DEGREES
-        )
-        if measured is None:
-            final_shoulder_angle = None
-            break
-        final_shoulder_angle = measured
-        if abs(measured) < SHOULDER_RESIDUAL_TOLERANCE:
-            break
-        face_box, _, _ = analyzer.analyze(image)
+    # Apply one conservative, measured shoulder correction. Repeated full
+    # strength shears can cumulatively distort shirt/shoulder proportions.
+    # If the residual remains high, report it for review instead of forcing
+    # the shoulders into an artificial shape or inventing missing anatomy.
+    image, measured = _level_shoulders_below_face(
+        image, analyzer, face_box, max_step=MAX_SHOULDER_CORRECTION_DEGREES
+    )
+    final_shoulder_angle = measured
 
     face_box, _, _ = analyzer.analyze(image)
     final_points = _shoulder_points(analyzer, image)
