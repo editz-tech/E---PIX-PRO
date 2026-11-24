@@ -39,19 +39,25 @@ class U2NetSession:
         low, high = float(prediction.min()), float(prediction.max())
         if high - low < 1e-8:
             raise RuntimeError("AI model returned an invalid foreground mask.")
-        # Do not min/max stretch the confidence map: that amplifies grey
-        # cast-shadow haze behind ears and along the neck. Raise the low
-        # confidence cutoff so uncertain background/shadow pixels become
-        # transparent, while a smooth ramp preserves fine hair edges.
+        # Suppress the uncertain outer silhouette where U2NET can mistake
+        # cast shadows behind ears/neck for foreground. Use a stronger
+        # confidence ramp, then contract only the outer matte by a few pixels.
+        # The soft final edge avoids a hard cut while removing grey halos.
         mask = np.clip(prediction, 0.0, 1.0)
-        lo, hi = 0.16, 0.78
+        lo, hi = 0.28, 0.82
         mask = np.clip((mask - lo) / (hi - lo), 0.0, 1.0)
         mask = mask * mask * (3.0 - 2.0 * mask)
         mask_image = Image.fromarray(np.uint8(mask * 255), mode="L")
         mask_image = mask_image.resize(rgb.size, Image.Resampling.LANCZOS)
-        # A very small feather removes jagged segmentation edges without
-        # restoring the broad translucent halo that causes grey shadows.
-        mask_image = mask_image.filter(ImageFilter.GaussianBlur(radius=0.18))
+
+        # Tighten the perimeter by ~2-3 source pixels. This targets the
+        # attached grey shadow fringe, not interior facial/shirt shading.
+        # Keep the operation deliberately small to protect ears and hair.
+        mask_array = np.asarray(mask_image, dtype=np.uint8)
+        kernel = np.ones((3, 3), np.uint8)
+        contracted = cv2.erode(mask_array, kernel, iterations=1)
+        mask_image = Image.fromarray(contracted, mode="L")
+        mask_image = mask_image.filter(ImageFilter.GaussianBlur(radius=0.35))
 
         # Preserve transparent pixels introduced by expand=True rotation.
         # The RGB inference input cannot represent transparency, so explicitly
