@@ -10,7 +10,7 @@ E-PIX PRO runs its portrait workflow locally using the bundled ONNX background-s
 - No external image API is called.
 - No subscription or internet connection is required for photo processing.
 - Original input files are not overwritten.
-- The workflow performs geometric alignment, background removal, white-background compositing and 35 × 45 mm output framing.
+- The workflow performs geometric alignment, confidence-thresholded background removal, white-background compositing and 35 × 45 mm output framing. The foreground mask suppresses low-confidence grey cast-shadow pixels around the subject boundary (including common ear/neck halo areas) while retaining a soft edge for hair. Natural facial and under-chin lighting is not erased.
 
 ### Face preservation limitation
 
