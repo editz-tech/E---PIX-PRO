@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 from PIL import Image
 
-from app import build_subject_alpha
+from shadow_matte import build_subject_alpha
 
 
 class ShadowMatteTests(unittest.TestCase):
