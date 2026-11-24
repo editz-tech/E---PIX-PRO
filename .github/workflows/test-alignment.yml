@@ -8,6 +8,7 @@ on:
     paths:
       - "app.py"
       - "portrait_alignment.py"
+      - "shadow_matte.py"
       - "tests/**"
       - ".github/workflows/test-alignment.yml"
   pull_request:
