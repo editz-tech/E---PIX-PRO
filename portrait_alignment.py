@@ -13,7 +13,7 @@ from PIL import Image
 
 MAX_FACE_ROLL_DEGREES = 12.0
 MAX_SHOULDER_CORRECTION_DEGREES = 10.0
-SHOULDER_RESIDUAL_TOLERANCE = 0.8
+SHOULDER_RESIDUAL_TOLERANCE = 2.0
 
 
 def _rotate_expand(image: Image.Image, angle_degrees: float) -> Image.Image:
@@ -59,13 +59,22 @@ def _normalized_line_angle(p1, p2):
 
 
 def _level_shoulders_below_face(image, analyzer, face_box, max_step=MAX_SHOULDER_CORRECTION_DEGREES):
-    """Apply a smooth lower-body shear while excluding the face and hair."""
+    """Correct only clearly uneven shoulders; leave already-good shoulders intact.
+
+    The supplied shoulder reference is used as a geometric guide: balanced,
+    front-facing shoulder height and a centered upper torso. It is not pasted
+    into the result, so each input keeps its own shirt, fabric texture and colour.
+    Small natural shoulder slopes (under two degrees) are deliberately preserved.
+    """
     points = _shoulder_points(analyzer, image)
     if points is None or face_box is None:
         return image, None
 
     p1, p2 = points
     measured = _normalized_line_angle(p1, p2)
+    # Do not process every portrait indiscriminately. Preserve the original
+    # shoulder/body pixels when the detected shoulder line is already within
+    # the natural tolerance; only visibly uneven cases receive the warp.
     if abs(measured) < SHOULDER_RESIDUAL_TOLERANCE:
         return image, measured
 
