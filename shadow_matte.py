@@ -38,10 +38,15 @@ def build_subject_alpha(raw_prediction, rgb):
         shadow_band = (
             (sure_fg == 0) &
             (distance <= band_width) &
-            (raw_full < 0.68) &
-            (saturation < 45) &
-            (gray >= 35.0) & (gray <= 238.0) &
-            (local_std < 48.0)
+            (raw_full < 0.76) &
+            (saturation < 60) &
+            (gray >= 35.0) & (gray <= 242.0) &
+            # A cast shadow next to a bright white background naturally has
+            # a higher local variance at its outer edge. The previous 48 limit
+            # rejected exactly those pixels, so the halo remained. This wider
+            # limit still rejects highly textured hair/fabric; near-black
+            # pixels and saturated skin are protected by the other tests.
+            (local_std < 88.0)
         )
         mask[shadow_band] = 0.0
 
