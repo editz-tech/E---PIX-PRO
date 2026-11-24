@@ -111,6 +111,35 @@ def build_subject_alpha(raw_prediction, rgb):
         mask[shadow_band] = 0.0
 
     mask = _guided_alpha_refine(mask, rgb)
+
+    # Final shadow-halo rejection AFTER guided filtering. Guided filters can
+    # otherwise pull low-opacity dark pixels back into the matte. Suppress only
+    # low-chroma, low-texture pixels just outside the confident subject core;
+    # never suppress pixels inside the core, so dark hair/skin/clothing remain.
+    sure_core = (raw_full >= 0.82).astype(np.uint8)
+    if np.any(sure_core):
+        outside_core = (1 - sure_core).astype(np.uint8)
+        dist_to_core = cv2.distanceTransform(outside_core, cv2.DIST_L2, 3)
+        shadow_band_width = max(10.0, min(rgb.size) * 0.018)
+        # Compare candidate pixels to the local confident-subject luminance.
+        core_luma = np.where(sure_core > 0, gray, 0.0).astype(np.float32)
+        core_count = cv2.boxFilter(sure_core.astype(np.float32), cv2.CV_32F,
+                                   (31, 31), normalize=False)
+        core_sum = cv2.boxFilter(core_luma, cv2.CV_32F, (31, 31),
+                                 normalize=False)
+        local_core_luma = core_sum / np.maximum(core_count, 1.0)
+        candidate_shadow = (
+            (sure_core == 0) &
+            (dist_to_core > 1.0) &
+            (dist_to_core <= shadow_band_width) &
+            (saturation < 72) &
+            (local_std < 72.0) &
+            (gray < np.maximum(105.0, local_core_luma - 28.0)) &
+            (raw_full < 0.88)
+        )
+        # Do not leave a translucent dark fringe behind ears, hair or shoulders.
+        mask[candidate_shadow] = 0.0
+
     cleaned_rgb = _decontaminate_edge_rgb(rgb_array, mask)
     # rgb is a private RGB copy created by U2NetSession; update it before the
     # RGBA foreground is assembled so new backgrounds do not inherit the
