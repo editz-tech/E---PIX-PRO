@@ -24,7 +24,7 @@ def build_subject_alpha(raw_prediction, rgb):
     # pixels in a narrow band OUTSIDE the high-confidence subject core.
     # This is intentionally not a global threshold/erosion: dark hair,
     # saturated skin, ears, neck and clothing remain protected.
-    raw = np.clip(prediction, 0.0, 1.0)
+    raw = np.clip(raw_prediction, 0.0, 1.0)
     raw_full = cv2.resize(raw, rgb.size, interpolation=cv2.INTER_CUBIC)
     raw_full = np.clip(raw_full, 0.0, 1.0)
     mask = np.clip((raw_full - 0.16) / (0.78 - 0.16), 0.0, 1.0)
@@ -63,7 +63,7 @@ def build_subject_alpha(raw_prediction, rgb):
 
 
 class U2NetSession:
-    """Direct U2NETP inference without rembg, pymatting or numba."""
+    """Direct full U2Net inference without rembg, pymatting or numba."""
     def __init__(self, model_path):
         options = ort.SessionOptions()
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
