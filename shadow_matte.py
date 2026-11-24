@@ -30,16 +30,18 @@ def build_subject_alpha(raw_prediction, rgb):
         outside = (1 - sure_fg).astype(np.uint8)
         distance = cv2.distanceTransform(outside, cv2.DIST_L2, 3)
         band_width = max(8.0, min(rgb.size) * 0.022)
-        # Grey cast shadows are usually low-chroma, smooth, mid/dark
-        # neutral pixels. Exclude dark hair (low luminance), colourful
-        # skin/clothes (higher saturation), and the confident subject core.
+        # Grey/near-black cast shadows are low-chroma and smoother than
+        # hair strands. Include edge-adjacent pixels in the variance limit;
+        # a narrow box window otherwise mistakes the shadow/white transition
+        # for texture and leaves the halo untouched. Dark textured hair is
+        # protected by the low-confidence and local-variance constraints.
         shadow_band = (
             (sure_fg == 0) &
             (distance <= band_width) &
             (raw_full < 0.68) &
             (saturation < 45) &
-            (gray >= 72.0) & (gray <= 238.0) &
-            (local_std < 13.0)
+            (gray >= 35.0) & (gray <= 238.0) &
+            (local_std < 48.0)
         )
         mask[shadow_band] = 0.0
 
