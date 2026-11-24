@@ -39,16 +39,19 @@ class U2NetSession:
         low, high = float(prediction.min()), float(prediction.max())
         if high - low < 1e-8:
             raise RuntimeError("AI model returned an invalid foreground mask.")
-        # Avoid per-image min/max stretching, which amplifies background haze.
-        # U2NETP emits a foreground confidence map; apply a gentle confidence
-        # remap and smoothstep to suppress low-confidence grey fringes.
+        # Do not min/max stretch the confidence map: that amplifies grey
+        # cast-shadow haze behind ears and along the neck. Raise the low
+        # confidence cutoff so uncertain background/shadow pixels become
+        # transparent, while a smooth ramp preserves fine hair edges.
         mask = np.clip(prediction, 0.0, 1.0)
-        lo, hi = 0.06, 0.78
+        lo, hi = 0.16, 0.78
         mask = np.clip((mask - lo) / (hi - lo), 0.0, 1.0)
         mask = mask * mask * (3.0 - 2.0 * mask)
         mask_image = Image.fromarray(np.uint8(mask * 255), mode="L")
         mask_image = mask_image.resize(rgb.size, Image.Resampling.LANCZOS)
-        mask_image = mask_image.filter(ImageFilter.GaussianBlur(radius=0.25))
+        # A very small feather removes jagged segmentation edges without
+        # restoring the broad translucent halo that causes grey shadows.
+        mask_image = mask_image.filter(ImageFilter.GaussianBlur(radius=0.18))
 
         # Preserve transparent pixels introduced by expand=True rotation.
         # The RGB inference input cannot represent transparency, so explicitly
