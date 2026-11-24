@@ -39,19 +39,45 @@ class U2NetSession:
         low, high = float(prediction.min()), float(prediction.max())
         if high - low < 1e-8:
             raise RuntimeError("AI model returned an invalid foreground mask.")
-        # Use a conservative confidence matte as the default for every portrait.
-        # A high global cutoff plus erosion can thin real hair/ear/neck edges and
-        # create dark-looking cutout defects across otherwise good photos.
-        # Keep the prior gentler threshold; do not erode the whole silhouette.
-        # Low-confidence cast-shadow pixels are softened by the smooth ramp,
-        # while stronger foreground confidence preserves real subject detail.
-        mask = np.clip(prediction, 0.0, 1.0)
-        lo, hi = 0.16, 0.78
-        mask = np.clip((mask - lo) / (hi - lo), 0.0, 1.0)
+        # Build a soft subject matte, then remove only likely cast-shadow
+        # pixels in a narrow band OUTSIDE the high-confidence subject core.
+        # This is intentionally not a global threshold/erosion: dark hair,
+        # saturated skin, ears, neck and clothing remain protected.
+        raw = np.clip(prediction, 0.0, 1.0)
+        raw_full = cv2.resize(raw, rgb.size, interpolation=cv2.INTER_CUBIC)
+        raw_full = np.clip(raw_full, 0.0, 1.0)
+        mask = np.clip((raw_full - 0.16) / (0.78 - 0.16), 0.0, 1.0)
         mask = mask * mask * (3.0 - 2.0 * mask)
-        mask_image = Image.fromarray(np.uint8(mask * 255), mode="L")
-        mask_image = mask_image.resize(rgb.size, Image.Resampling.LANCZOS)
-        mask_image = mask_image.filter(ImageFilter.GaussianBlur(radius=0.18))
+
+        rgb_array = np.asarray(rgb, dtype=np.uint8)
+        hsv = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2HSV)
+        gray = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2GRAY).astype(np.float32)
+        saturation = hsv[:, :, 1]
+        # Local texture distinguishes smooth studio cast shadows from hair.
+        mean = cv2.boxFilter(gray, cv2.CV_32F, (9, 9), normalize=True)
+        mean_sq = cv2.boxFilter(gray * gray, cv2.CV_32F, (9, 9), normalize=True)
+        local_std = np.sqrt(np.maximum(mean_sq - mean * mean, 0.0))
+
+        sure_fg = (raw_full >= 0.72).astype(np.uint8)
+        if np.any(sure_fg):
+            outside = (1 - sure_fg).astype(np.uint8)
+            distance = cv2.distanceTransform(outside, cv2.DIST_L2, 3)
+            band_width = max(8.0, min(rgb.size) * 0.022)
+            # Grey cast shadows are usually low-chroma, smooth, mid/dark
+            # neutral pixels. Exclude dark hair (low luminance), colourful
+            # skin/clothes (higher saturation), and the confident subject core.
+            shadow_band = (
+                (sure_fg == 0) &
+                (distance <= band_width) &
+                (raw_full < 0.68) &
+                (saturation < 45) &
+                (gray >= 72.0) & (gray <= 238.0) &
+                (local_std < 13.0)
+            )
+            mask[shadow_band] = 0.0
+
+        mask_image = Image.fromarray(np.uint8(np.clip(mask, 0.0, 1.0) * 255), mode="L")
+        mask_image = mask_image.filter(ImageFilter.GaussianBlur(radius=0.28))
 
         # Preserve transparent pixels introduced by expand=True rotation.
         # The RGB inference input cannot represent transparency, so explicitly
