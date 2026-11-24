@@ -39,25 +39,19 @@ class U2NetSession:
         low, high = float(prediction.min()), float(prediction.max())
         if high - low < 1e-8:
             raise RuntimeError("AI model returned an invalid foreground mask.")
-        # Suppress the uncertain outer silhouette where U2NET can mistake
-        # cast shadows behind ears/neck for foreground. Use a stronger
-        # confidence ramp, then contract only the outer matte by a few pixels.
-        # The soft final edge avoids a hard cut while removing grey halos.
+        # Use a conservative confidence matte as the default for every portrait.
+        # A high global cutoff plus erosion can thin real hair/ear/neck edges and
+        # create dark-looking cutout defects across otherwise good photos.
+        # Keep the prior gentler threshold; do not erode the whole silhouette.
+        # Low-confidence cast-shadow pixels are softened by the smooth ramp,
+        # while stronger foreground confidence preserves real subject detail.
         mask = np.clip(prediction, 0.0, 1.0)
-        lo, hi = 0.28, 0.82
+        lo, hi = 0.16, 0.78
         mask = np.clip((mask - lo) / (hi - lo), 0.0, 1.0)
         mask = mask * mask * (3.0 - 2.0 * mask)
         mask_image = Image.fromarray(np.uint8(mask * 255), mode="L")
         mask_image = mask_image.resize(rgb.size, Image.Resampling.LANCZOS)
-
-        # Tighten the perimeter by ~2-3 source pixels. This targets the
-        # attached grey shadow fringe, not interior facial/shirt shading.
-        # Keep the operation deliberately small to protect ears and hair.
-        mask_array = np.asarray(mask_image, dtype=np.uint8)
-        kernel = np.ones((3, 3), np.uint8)
-        contracted = cv2.erode(mask_array, kernel, iterations=1)
-        mask_image = Image.fromarray(contracted, mode="L")
-        mask_image = mask_image.filter(ImageFilter.GaussianBlur(radius=0.35))
+        mask_image = mask_image.filter(ImageFilter.GaussianBlur(radius=0.18))
 
         # Preserve transparent pixels introduced by expand=True rotation.
         # The RGB inference input cannot represent transparency, so explicitly
