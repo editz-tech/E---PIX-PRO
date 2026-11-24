@@ -7,7 +7,7 @@ from shadow_matte import build_subject_alpha
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance, ImageChops
-from PySide6.QtCore import QObject, Signal, QThread
+from PySide6.QtCore import QObject, Signal, QThread, Qt
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox, QComboBox)
 
 APP_NAME = "E-PIX PRO"
@@ -200,7 +200,7 @@ def straighten_roll(image, analyzer):
     return image, face_box, applied
 
 
-def passport_crop(subject_rgba, face_box=None):
+def passport_crop(subject_rgba, face_box=None, background_color="#FFFFFF"):
     """Build a face-scaled 35:45 ID portrait with safe, level edges.
 
     A fixed full-frame resize makes faces too small when the camera framing
@@ -287,7 +287,8 @@ def passport_crop(subject_rgba, face_box=None):
                 rgba = rgba.crop((0, top, src_w, top + crop_h))
 
     rgba = rgba.resize(OUTPUT_SIZE, Image.Resampling.LANCZOS)
-    canvas = Image.new("RGBA", OUTPUT_SIZE, (255, 255, 255, 255))
+    bg = tuple(int(background_color[i:i + 2], 16) for i in (1, 3, 5))
+    canvas = Image.new("RGBA", OUTPUT_SIZE, (*bg, 255))
     canvas.alpha_composite(rgba, (0, 0))
     return canvas.convert("RGB")
 
@@ -311,7 +312,7 @@ def apply_lighting_tone(image, mode="Auto balanced"):
     return Image.fromarray(corrected, "RGB")
 
 
-def process_photo(source, destination, session, face_analyzer, lighting_mode="Auto balanced"):
+def process_photo(source, destination, session, face_analyzer, lighting_mode="Auto balanced", background_color="#FFFFFF"):
     with Image.open(source) as opened:
         original = ImageOps.exif_transpose(opened).convert("RGBA")
 
@@ -329,7 +330,7 @@ def process_photo(source, destination, session, face_analyzer, lighting_mode="Au
     cutout = subject_rgb.convert("RGBA")
     cutout.putalpha(subject_alpha)
     # Use the post-straightening face position to centre the final portrait.
-    result = passport_crop(cutout, face_box)
+    result = passport_crop(cutout, face_box, background_color)
     result = result.filter(ImageFilter.UnsharpMask(radius=0.9, percent=105, threshold=3))
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
@@ -355,9 +356,9 @@ class Worker(QObject):
     progress = Signal(int, int, str)
     done = Signal(int, int)
     failed = Signal(str)
-    def __init__(self, files, output, lighting_mode="Auto balanced"):
+    def __init__(self, files, output, lighting_mode="Auto balanced", background_color="#FFFFFF"):
         super().__init__()
-        self.files, self.output, self.lighting_mode = files, output, lighting_mode
+        self.files, self.output, self.lighting_mode, self.background_color = files, output, lighting_mode, background_color
     def run(self):
         try:
             model_dir = resource_path("models")
@@ -371,7 +372,7 @@ class Worker(QObject):
             for i, src in enumerate(self.files, 1):
                 try:
                     target = output_path_for(src, self.output)
-                    framing = process_photo(src, target, session, face_analyzer, self.lighting_mode); ok += 1
+                    framing = process_photo(src, target, session, face_analyzer, self.lighting_mode, self.background_color); ok += 1
                     self.progress.emit(i, len(self.files), f"Saved ({framing}): {src.name} → {target.name}")
                 except Exception as exc:
                     errors += 1; self.progress.emit(i, len(self.files), f"FAILED: {src.name}: {exc}")
@@ -405,6 +406,24 @@ class MainWindow(QMainWindow):
         lighting_row.addWidget(self.lighting)
         lighting_row.addWidget(QLabel("Auto balanced is recommended for mixed lighting batches."))
         layout.addWidget(lighting_box)
+        background_box = QGroupBox("4. Output background")
+        background_row = QHBoxLayout(background_box)
+        background_row.addWidget(QLabel("Choose background:"))
+        self.background_color = "#FFFFFF"
+        self.background_buttons = []
+        for color in ["#FFFFFF", "#F5F5F5", "#E0E0E0", "#D4E6F1", "#2B6CB0", "#C8102E"]:
+            swatch = QPushButton("")
+            swatch.setFixedSize(42, 28)
+            swatch.setCursor(Qt.CursorShape.PointingHandCursor)
+            swatch.setStyleSheet(
+                f"QPushButton {{ background-color: {color}; border: 2px solid "
+                f"{'#58a6ff' if color == self.background_color else '#52657d'}; border-radius: 4px; }}"
+            )
+            swatch.clicked.connect(lambda checked=False, value=color: self.select_background_color(value))
+            self.background_buttons.append((swatch, color))
+            background_row.addWidget(swatch)
+        background_row.addStretch(1)
+        layout.addWidget(background_box)
         self.start = QPushButton("START PROCESSING"); self.start.setMinimumHeight(48)
         self.start.setStyleSheet("background:#1769aa;color:white;font-weight:700;border-radius:7px;")
         self.start.clicked.connect(self.start_processing); layout.addWidget(self.start)
@@ -490,10 +509,17 @@ class MainWindow(QMainWindow):
     def choose_output(self):
         d = QFileDialog.getExistingDirectory(self,"Choose output folder",self.output.text())
         if d: self.output.setText(d)
+    def select_background_color(self, color):
+        self.background_color = color
+        for button, value in self.background_buttons:
+            border = "#58a6ff" if value == color else "#52657d"
+            button.setStyleSheet(
+                f"QPushButton {{ background-color: {value}; border: 2px solid {border}; border-radius: 4px; }}"
+            )
     def start_processing(self):
         if not self.files: QMessageBox.warning(self,"No photos","Choose one or more photos first."); return
         self.start.setEnabled(False); self.progress.setValue(0); self.log.clear()
-        self.thread = QThread(); self.worker = Worker(self.files, Path(self.output.text()).expanduser(), self.lighting.currentText())
+        self.thread = QThread(); self.worker = Worker(self.files, Path(self.output.text()).expanduser(), self.lighting.currentText(), self.background_color)
         self.worker.moveToThread(self.thread); self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.on_progress); self.worker.done.connect(self.on_done); self.worker.failed.connect(self.on_failed)
         self.worker.done.connect(self.thread.quit); self.worker.failed.connect(self.thread.quit)
