@@ -344,7 +344,7 @@ class Worker(QObject):
         try:
             model_dir = resource_path("models")
             os.environ["U2NET_HOME"] = str(model_dir)
-            model = model_dir / "u2net.onnx"
+            model = model_dir / "u2netp.onnx"
             if not model.exists():
                 raise RuntimeError("Offline AI model missing. Reinstall the application.")
             session = U2NetSession(model)
