@@ -3,7 +3,7 @@ import os, sys, traceback
 from pathlib import Path
 import cv2
 from portrait_alignment import straighten_portrait
-from shadow_matte import build_subject_alpha, fix_ear_halo, remove_baked_ear_halo
+from shadow_matte import build_subject_alpha, fix_ear_halo
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance, ImageChops
@@ -300,20 +300,10 @@ def passport_crop(subject_rgba, face_box=None, background_color="#FFFFFF"):
                 rgba = rgba.crop((0, top, src_w, top + crop_h))
 
     rgba = rgba.resize(OUTPUT_SIZE, Image.Resampling.LANCZOS)
-
-    # Apply baked-in halo cleanup AFTER the final crop/resize and BEFORE export.
-    # This is the real resized U2Net subject alpha, not an estimated mask.
     bg = tuple(int(background_color[i:i + 2], 16) for i in (1, 3, 5))
-    cleaned_rgb = remove_baked_ear_halo(
-        np.asarray(rgba.convert("RGB"), dtype=np.uint8),
-        mask=np.asarray(rgba.getchannel("A"), dtype=np.uint8),
-        erode_px=2,
-        feather_sigma=0.7,
-        bg_whiten_min_val=165,
-        bg_max_chroma=28,
-        bg_color=bg,
-    )
-    return Image.fromarray(cleaned_rgb, mode="RGB")
+    canvas = Image.new("RGBA", OUTPUT_SIZE, (*bg, 255))
+    canvas.alpha_composite(rgba, (0, 0))
+    return canvas.convert("RGB")
 
 def apply_lighting_tone(image, mode="Auto balanced"):
     """Gentle per-photo exposure and tone normalization; preserve skin identity."""
