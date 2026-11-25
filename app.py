@@ -6,9 +6,9 @@ from portrait_alignment import straighten_portrait
 from shadow_matte import build_subject_alpha
 import numpy as np
 import onnxruntime as ort
-from PIL import Image, ImageOps, ImageFilter, ImageEnhance, ImageChops
+from PIL import Image, ImageOps, ImageFilter, ImageChops
 from PySide6.QtCore import QObject, Signal, QThread, QTimer
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox, QComboBox)
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox)
 
 APP_NAME = "E-PIX PRO"
 RATIO = 35 / 45
