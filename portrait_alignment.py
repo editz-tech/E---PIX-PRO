@@ -131,9 +131,9 @@ def straighten_portrait(image: Image.Image, analyzer):
 
     final_shoulder_angle = None
     last_pass_warped = False
-    # Keep the same five-pass shoulder correction, but do not rerun FaceMesh
+    # Limit shoulder correction to two measured passes, but do not rerun FaceMesh
     # after each lower-body warp: the face region and its crop bounds are intact.
-    for _ in range(5):
+    for _ in range(2):
         previous_image = image
         image, measured = _level_shoulders_below_face(
             image, analyzer, face_box, max_step=MAX_SHOULDER_CORRECTION_DEGREES
