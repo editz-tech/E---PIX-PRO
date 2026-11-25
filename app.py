@@ -24,6 +24,11 @@ class U2NetSession:
     def __init__(self, model_path):
         options = ort.SessionOptions()
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        # Avoid CPU oversubscription on common Windows desktops while keeping
+        # ONNX inference parallel. One inter-op worker is enough for this graph.
+        options.intra_op_num_threads = max(1, min(4, os.cpu_count() or 2))
+        options.inter_op_num_threads = 1
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         self.session = ort.InferenceSession(
             str(model_path), sess_options=options, providers=["CPUExecutionProvider"]
         )
@@ -88,7 +93,8 @@ class FaceAnalyzer:
             enable_segmentation=False, min_detection_confidence=0.55
         )
 
-    def analyze(self, image):
+    def analyze_face(self, image):
+        """Run only FaceMesh when face landmarks are needed."""
         rgb = np.asarray(image.convert("RGB"))
         height, width = rgb.shape[:2]
         face_box, face_roll = None, 0.0
@@ -100,9 +106,6 @@ class FaceAnalyzer:
             x0, x1 = int(max(0, np.floor(xs.min()))), int(min(width, np.ceil(xs.max())))
             y0, y1 = int(max(0, np.floor(ys.min()))), int(min(height, np.ceil(ys.max())))
             # Estimate head roll from both eye centres, not just the outer corners.
-            # FaceMesh indices: right eye 33/133, left eye 362/263.
-            # Averaging inner + outer corners is more stable under eyelid shape
-            # and small landmark jitter.
             right_eye = ((points[33].x + points[133].x) / 2.0,
                          (points[33].y + points[133].y) / 2.0)
             left_eye = ((points[362].x + points[263].x) / 2.0,
@@ -112,9 +115,12 @@ class FaceAnalyzer:
             face_roll = float(np.degrees(np.arctan2(dy, dx)))
             if x1 > x0 and y1 > y0:
                 face_box = (x0, y0, x1 - x0, y1 - y0)
+        return face_box, face_roll
 
-        # Pose shoulder landmarks (11 and 12) give the body line. Use this
-        # instead of assuming the eye line and shoulders have the same angle.
+    def analyze_pose(self, image):
+        """Run only Pose when shoulder landmarks are needed."""
+        rgb = np.asarray(image.convert("RGB"))
+        height, width = rgb.shape[:2]
         shoulder_roll = None
         pose_result = self._pose.process(rgb)
         if pose_result.pose_landmarks:
@@ -124,8 +130,13 @@ class FaceAnalyzer:
                 dx = (right_shoulder.x - left_shoulder.x) * width
                 dy = (right_shoulder.y - left_shoulder.y) * height
                 angle = float(np.degrees(np.arctan2(dy, dx)))
-                # Normalize the line direction to the horizontal range.
                 shoulder_roll = ((angle + 90.0) % 180.0) - 90.0
+        return shoulder_roll
+
+    def analyze(self, image):
+        """Compatibility wrapper returning face and shoulder measurements."""
+        face_box, face_roll = self.analyze_face(image)
+        shoulder_roll = self.analyze_pose(image)
         return face_box, face_roll, shoulder_roll
 
     def close(self):
@@ -347,15 +358,16 @@ def process_photo(source, destination, session, face_analyzer, lighting_mode="Au
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
     if suffix in (".jpg", ".jpeg"):
-        result.save(destination, "JPEG", quality=96, dpi=DPI, optimize=True)
+        result.save(destination, "JPEG", quality=96, dpi=DPI, optimize=False)
     elif suffix == ".png":
-        result.save(destination, "PNG", dpi=DPI, optimize=True)
+        # Lower compression spends less CPU; pixel data and output dimensions are unchanged.
+        result.save(destination, "PNG", dpi=DPI, optimize=False, compress_level=3)
     elif suffix in (".tif", ".tiff"):
         result.save(destination, "TIFF", dpi=DPI, compression="tiff_lzw")
     elif suffix == ".bmp":
         result.save(destination, "BMP", dpi=DPI)
     elif suffix == ".webp":
-        result.save(destination, "WEBP", quality=96, method=6)
+        result.save(destination, "WEBP", quality=96, method=4)
     else:
         raise ValueError(f"Unsupported output format: {suffix}")
     if face_box is None:
