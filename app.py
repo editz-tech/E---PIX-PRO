@@ -1,13 +1,13 @@
 from __future__ import annotations
-import os, sys, traceback
+import os, sys, traceback, time
 from pathlib import Path
 import cv2
 from portrait_alignment import straighten_portrait
-from shadow_matte import build_subject_alpha, fix_ear_halo
+from shadow_matte import build_subject_alpha
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance, ImageChops
-from PySide6.QtCore import QObject, Signal, QThread
+from PySide6.QtCore import QObject, Signal, QThread, QTimer
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox, QComboBox)
 
 APP_NAME = "E-PIX PRO"
@@ -46,19 +46,6 @@ class U2NetSession:
         if high - low < 1e-8:
             raise RuntimeError("AI model returned an invalid foreground mask.")
         mask_image = build_subject_alpha(prediction, rgb)
-
-        # Additional cleanup for dark/grey edge halos around ears, hair,
-        # neck and shoulders. Keep alpha separate so the selected output
-        # background colour is still applied later during passport cropping.
-        cleaned_rgb, cleaned_alpha = fix_ear_halo(
-            np.asarray(rgb, dtype=np.uint8),
-            np.asarray(mask_image, dtype=np.uint8),
-            low_alpha_cutoff=0.35,
-            feather_sigma=0.6,
-            erode_px=0,
-        )
-        rgb = Image.fromarray(cleaned_rgb, mode="RGB")
-        mask_image = Image.fromarray(cleaned_alpha, mode="L")
 
         # Preserve transparent pixels introduced by expand=True rotation.
         # The RGB inference input cannot represent transparency, so explicitly
@@ -315,43 +302,13 @@ def passport_crop(subject_rgba, face_box=None):
     canvas.alpha_composite(rgba, (0, 0))
     return canvas.convert("RGB")
 
-def apply_lighting_tone(image, mode="Auto balanced"):
-    """Gentle per-photo exposure and tone normalization; preserve skin identity."""
-    rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
-    lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
-    l = lab[:, :, 0].astype(np.float32)
-    if mode == "Soft":
-        target_mid, contrast = 138.0, 1.035
-    elif mode == "Bright":
-        target_mid, contrast = 148.0, 1.045
-    else:  # Auto balanced: adapt exposure gently to each image
-        target_mid, contrast = 143.0, 1.055
-    # Use robust luminance percentiles so isolated highlights do not drive exposure.
-    p45 = float(np.percentile(l, 45))
-    shift = float(np.clip(target_mid - p45, -9.0, 12.0))
-    l = (l - 128.0) * contrast + 128.0 + shift
-    lab[:, :, 0] = np.clip(l, 0, 255).astype(np.uint8)
-    corrected = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
-    return Image.fromarray(corrected, "RGB")
-
-
-def process_photo(source, destination, session, face_analyzer, lighting_mode="Auto balanced"):
+def process_photo(source, destination, session, face_analyzer):
     with Image.open(source) as opened:
         original = ImageOps.exif_transpose(opened).convert("RGBA")
 
     original, face_box, roll, shoulder_angle = straighten_portrait(original, face_analyzer)
     cutout = session.remove_background(original)
-    # Keep colour neutral. The earlier saturation boost made skin too orange
-    # compared with the approved demo. Use restrained contrast only; do not
-    # globally brighten or recolour the subject.
-    subject_alpha = cutout.getchannel("A")
-    subject_rgb = cutout.convert("RGB")
-    # Apply per-photo lighting normalization selected by the user.
-    subject_rgb = apply_lighting_tone(subject_rgb, lighting_mode)
-    # Small saturation restraint avoids orange skin while retaining natural colour.
-    subject_rgb = ImageEnhance.Color(subject_rgb).enhance(0.99)
-    cutout = subject_rgb.convert("RGBA")
-    cutout.putalpha(subject_alpha)
+    # Skip optional per-photo lighting/tone normalization for a faster, neutral pipeline.
     # Use the post-straightening face position to centre the final portrait.
     result = passport_crop(cutout, face_box)
     result = result.filter(ImageFilter.UnsharpMask(radius=0.9, percent=105, threshold=3))
@@ -380,9 +337,9 @@ class Worker(QObject):
     progress = Signal(int, int, str)
     done = Signal(int, int)
     failed = Signal(str)
-    def __init__(self, files, output, lighting_mode="Auto balanced"):
+    def __init__(self, files, output):
         super().__init__()
-        self.files, self.output, self.lighting_mode = files, output, lighting_mode
+        self.files, self.output = files, output
     def run(self):
         try:
             model_dir = resource_path("models")
@@ -396,7 +353,7 @@ class Worker(QObject):
             for i, src in enumerate(self.files, 1):
                 try:
                     target = output_path_for(src, self.output)
-                    framing = process_photo(src, target, session, face_analyzer, self.lighting_mode); ok += 1
+                    framing = process_photo(src, target, session, face_analyzer); ok += 1
                     self.progress.emit(i, len(self.files), f"Saved ({framing}): {src.name} → {target.name}")
                 except Exception as exc:
                     errors += 1; self.progress.emit(i, len(self.files), f"FAILED: {src.name}: {exc}")
@@ -421,20 +378,17 @@ class MainWindow(QMainWindow):
         browse = QPushButton("Browse"); browse.clicked.connect(self.choose_output)
         outrow.addWidget(self.output); outrow.addWidget(browse); layout.addWidget(outbox)
         self.preserve = QCheckBox("Preserve original filename (required)"); self.preserve.setChecked(True); self.preserve.setEnabled(False); layout.addWidget(self.preserve)
-        lighting_box = QGroupBox("3. Lighting & skin tone")
-        lighting_row = QHBoxLayout(lighting_box)
-        lighting_row.addWidget(QLabel("Correction preset:"))
-        self.lighting = QComboBox()
-        self.lighting.addItems(["Auto balanced", "Soft", "Bright"])
-        self.lighting.setToolTip("Applies gentle per-photo exposure and contrast normalization.")
-        lighting_row.addWidget(self.lighting)
-        lighting_row.addWidget(QLabel("Auto balanced is recommended for mixed lighting batches."))
-        layout.addWidget(lighting_box)
         self.start = QPushButton("START PROCESSING"); self.start.setMinimumHeight(48)
         self.start.setStyleSheet("background:#1769aa;color:white;font-weight:700;border-radius:7px;")
         self.start.clicked.connect(self.start_processing); layout.addWidget(self.start)
         self.progress = QProgressBar(); layout.addWidget(self.progress)
         self.status = QLabel("Ready • Original photos are never modified."); layout.addWidget(self.status)
+        self.elapsed_label = QLabel("Elapsed time: 00:00")
+        self.elapsed_label.setStyleSheet("font-size:12pt;font-weight:700;color:#58a6ff;")
+        layout.addWidget(self.elapsed_label)
+        self.elapsed_timer = QTimer(self); self.elapsed_timer.setInterval(250)
+        self.elapsed_timer.timeout.connect(self.update_elapsed_time)
+        self.processing_started = None
         self.log = QTextEdit(); self.log.setReadOnly(True); layout.addWidget(self.log)
         note = QLabel("OFFLINE PROCESSING • No API key, subscription, or internet connection required. Original facial pixels are not generatively recreated; geometric alignment and background removal may still affect image positioning. Review every result before official use.")
         note.setWordWrap(True); note.setStyleSheet("color:#e3b341;"); layout.addWidget(note)
@@ -518,16 +472,27 @@ class MainWindow(QMainWindow):
     def start_processing(self):
         if not self.files: QMessageBox.warning(self,"No photos","Choose one or more photos first."); return
         self.start.setEnabled(False); self.progress.setValue(0); self.log.clear()
-        self.thread = QThread(); self.worker = Worker(self.files, Path(self.output.text()).expanduser(), self.lighting.currentText())
+        self.processing_started = time.perf_counter()
+        self.elapsed_label.setText("Elapsed time: 00:00")
+        self.elapsed_timer.start()
+        self.thread = QThread(); self.worker = Worker(self.files, Path(self.output.text()).expanduser())
         self.worker.moveToThread(self.thread); self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.on_progress); self.worker.done.connect(self.on_done); self.worker.failed.connect(self.on_failed)
         self.worker.done.connect(self.thread.quit); self.worker.failed.connect(self.thread.quit)
         self.thread.finished.connect(self.thread.deleteLater); self.thread.start()
+    def update_elapsed_time(self):
+        if self.processing_started is None: return
+        seconds = int(time.perf_counter() - self.processing_started)
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        self.elapsed_label.setText(f"Elapsed time: {hours:02d}:{minutes:02d}:{seconds:02d}")
     def on_progress(self, current, total, message):
         self.progress.setMaximum(total); self.progress.setValue(current); self.status.setText(f"Processing {current} of {total}"); self.log.append(message)
     def on_done(self, ok, errors):
+        self.elapsed_timer.stop(); self.update_elapsed_time()
         self.start.setEnabled(True); self.status.setText(f"Finished • {ok} successful • {errors} failed"); self.log.append(f"Finished: {ok} successful, {errors} failed.")
     def on_failed(self, message):
+        self.elapsed_timer.stop(); self.update_elapsed_time()
         self.start.setEnabled(True); self.status.setText("Processing could not start."); self.log.append(message)
         QMessageBox.critical(self,"Processing error","Offline processing engine could not start. See log for details.")
 
