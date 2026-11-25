@@ -7,7 +7,7 @@ target = Path("models/u2netp.onnx")
 target.parent.mkdir(parents=True, exist_ok=True)
 
 if not target.exists():
-    print("Downloading full U2Net model for offline E-PIX PRO...")
+    print("Downloading lightweight U2NETP model for offline E-PIX PRO...")
     temporary = target.with_suffix(".onnx.download")
     try:
         with urlopen(URL, timeout=300) as response, temporary.open("wb") as output:
