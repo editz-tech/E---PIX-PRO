@@ -30,6 +30,7 @@ The GitHub Actions portable workflow performs these checks before publishing an 
 - Creates the portable ZIP and extracts it again to verify that the expected files are present.
 - Runs Microsoft Defender signature updates and custom scans against the build folder and ZIP. Publication stops if Defender reports a new detection or the scan tools are unavailable.
 - Publishes a SHA-256 checksum file and a build manifest containing the source commit, executable hash, ZIP hash, Authenticode status and scan result.
+- Generates a GitHub artifact provenance attestation for the portable ZIP, linking the package to the repository source and Actions build.
 
 ### Important: this build is unsigned
 
@@ -47,6 +48,14 @@ Get-Content .\SHA256SUMS.txt
 ```
 
 The hash printed by the first command must exactly match the 64-character hash in `SHA256SUMS.txt`. This confirms that the ZIP matches the checksum published in the same GitHub Actions artifact; it does not prove that the application is safe or signed. For stronger provenance, compare the build manifest's source commit with the repository commit used for the workflow run.
+
+If GitHub CLI is installed, verify the build provenance from the repository root or from any folder containing the downloaded ZIP:
+
+```powershell
+gh attestation verify .\\E-PIX-PRO-Portable.zip --repo editz-tech/E---PIX-PRO
+```
+
+A successful attestation confirms the recorded GitHub Actions build provenance for that ZIP. It is not a malware scan and does not override Chrome Safe Browsing or Windows SmartScreen decisions.
 
 
 ## Windows installer distribution
