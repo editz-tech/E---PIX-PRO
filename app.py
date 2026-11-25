@@ -3,7 +3,7 @@ import os, sys, traceback
 from pathlib import Path
 import cv2
 from portrait_alignment import straighten_portrait
-from shadow_matte import build_subject_alpha
+from shadow_matte import build_subject_alpha, fix_ear_halo
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance, ImageChops
