@@ -8,6 +8,53 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 
+def fix_ear_halo(
+    rgb: np.ndarray,
+    alpha: np.ndarray,
+    low_alpha_cutoff: float = 0.35,
+    feather_sigma: float = 0.6,
+    erode_px: int = 0,
+):
+    """Remove dark/grey matte fringe while preserving alpha for final compositing.
+
+    This is the alpha-preserving adaptation of the supplied ear-halo cleanup.
+    The final white/background composite remains in passport_crop so the UI's
+    selectable background colours continue to work. Erosion is opt-in because
+    shrinking the matte by default can clip fine hair, ears and clothing.
+    """
+    if alpha.dtype == np.uint8:
+        a = alpha.astype(np.float32) / 255.0
+    else:
+        a = np.clip(alpha.astype(np.float32).copy(), 0.0, 1.0)
+
+    # Remove only faint, low-opacity fringe; retain the main soft silhouette.
+    a[a < low_alpha_cutoff] = 0.0
+
+    # Optional mask contraction for cases with a clearly visible residual rim.
+    # Keep disabled by default to avoid cutting natural ear/hair contours.
+    if erode_px > 0:
+        binary = (a > 0.5).astype(np.uint8)
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * erode_px + 1, 2 * erode_px + 1)
+        )
+        eroded_fg = cv2.erode(binary, kernel, iterations=1)
+        a = np.where(eroded_fg > 0, a, 0.0)
+
+    if feather_sigma > 0:
+        ksize = max(3, int(round(feather_sigma * 4)) | 1)
+        a = cv2.GaussianBlur(a, (ksize, ksize), feather_sigma)
+        a[a < 0.05] = 0.0
+
+    # Decontaminate RGB only in the narrow anti-aliased boundary band.
+    edge_band = ((a > 0.05) & (a < 0.98)).astype(np.uint8)
+    cleaned = np.asarray(rgb, dtype=np.uint8).copy()
+    if np.any(edge_band):
+        cleaned = cv2.inpaint(cleaned, edge_band, inpaintRadius=2,
+                              flags=cv2.INPAINT_TELEA)
+
+    return cleaned, np.uint8(np.clip(a, 0.0, 1.0) * 255.0)
+
+
 def _guided_alpha_refine(alpha, rgb):
     """Align the soft AI alpha to visible image edges without hard thresholding."""
     image = np.asarray(rgb, dtype=np.uint8)
