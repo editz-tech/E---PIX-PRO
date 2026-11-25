@@ -117,7 +117,9 @@ def straighten_portrait(image: Image.Image, analyzer):
     final_shoulder_angle_degrees). Face pixels are not generatively edited.
     """
     image = image.convert("RGBA")
-    face_box, face_roll, _ = analyzer.analyze(image)
+    # FaceMesh is comparatively expensive. The face box is needed initially
+    # and after whole-image rotation only; shoulder warps never touch the face.
+    face_box, face_roll = analyzer.analyze_face(image)
 
     # Never infer face orientation from the shoulders when facial landmarks
     # are missing. This avoids rotating a face based on an unrelated body pose.
@@ -125,26 +127,29 @@ def straighten_portrait(image: Image.Image, analyzer):
     if face_box is not None and abs(face_roll) >= 0.5:
         applied_roll = float(np.clip(face_roll, -MAX_FACE_ROLL_DEGREES, MAX_FACE_ROLL_DEGREES))
         image = _rotate_expand(image, applied_roll)
-        face_box, _, _ = analyzer.analyze(image)
+        face_box, _ = analyzer.analyze_face(image)
 
     final_shoulder_angle = None
-    # Several small, re-measured passes handle landmark movement after each
-    # transform without applying one extreme, visually damaging warp.
+    last_pass_warped = False
+    # Keep the same five-pass shoulder correction, but do not rerun FaceMesh
+    # after each lower-body warp: the face region and its crop bounds are intact.
     for _ in range(5):
+        previous_image = image
         image, measured = _level_shoulders_below_face(
             image, analyzer, face_box, max_step=MAX_SHOULDER_CORRECTION_DEGREES
         )
+        last_pass_warped = image is not previous_image
         if measured is None:
             final_shoulder_angle = None
             break
         final_shoulder_angle = measured
-        if abs(measured) < SHOULDER_RESIDUAL_TOLERANCE:
+        if not last_pass_warped or abs(measured) < SHOULDER_RESIDUAL_TOLERANCE:
             break
-        face_box, _, _ = analyzer.analyze(image)
 
-    face_box, _, _ = analyzer.analyze(image)
-    final_points = _shoulder_points(analyzer, image)
-    final_shoulder_angle = (
-        _normalized_line_angle(*final_points) if final_points is not None else None
-    )
+    # Re-measure only if the fifth and final pass actually changed the image.
+    if last_pass_warped:
+        final_points = _shoulder_points(analyzer, image)
+        final_shoulder_angle = (
+            _normalized_line_angle(*final_points) if final_points is not None else None
+        )
     return image, face_box, applied_roll, final_shoulder_angle
