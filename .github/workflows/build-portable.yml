@@ -32,6 +32,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   portable:
@@ -164,6 +166,11 @@ jobs:
           $manifest | ConvertTo-Json -Depth 5 | Set-Content "BUILD-MANIFEST.json" -Encoding UTF8
           Get-Content "SHA256SUMS.txt"
           Get-Content "BUILD-MANIFEST.json"
+
+      - name: Generate GitHub build provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: E-PIX-PRO-Portable.zip
 
       - name: Upload verified portable package and verification files
         uses: actions/upload-artifact@v4
