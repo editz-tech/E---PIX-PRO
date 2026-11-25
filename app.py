@@ -42,6 +42,19 @@ class U2NetSession:
             raise RuntimeError("AI model returned an invalid foreground mask.")
         mask_image = build_subject_alpha(prediction, rgb)
 
+        # Additional cleanup for dark/grey edge halos around ears, hair,
+        # neck and shoulders. Keep alpha separate so the selected output
+        # background colour is still applied later during passport cropping.
+        cleaned_rgb, cleaned_alpha = fix_ear_halo(
+            np.asarray(rgb, dtype=np.uint8),
+            np.asarray(mask_image, dtype=np.uint8),
+            low_alpha_cutoff=0.35,
+            feather_sigma=0.6,
+            erode_px=0,
+        )
+        rgb = Image.fromarray(cleaned_rgb, mode="RGB")
+        mask_image = Image.fromarray(cleaned_alpha, mode="L")
+
         # Preserve transparent pixels introduced by expand=True rotation.
         # The RGB inference input cannot represent transparency, so explicitly
         # intersect the AI mask with the rotated source-image validity alpha.
