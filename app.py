@@ -366,8 +366,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1360, 820)
-        self.setMinimumSize(1120, 720)
+        self.resize(1360, 780)
+        self.setMinimumSize(1080, 620)
         self.files = []
         self.settings = QSettings("EPIX", "E-PIX PRO")
         self.processing_started = None
@@ -378,15 +378,15 @@ class MainWindow(QMainWindow):
         root.setObjectName("root")
         self.setCentralWidget(root)
         page = QVBoxLayout(root)
-        page.setContentsMargins(22, 14, 22, 18)
-        page.setSpacing(14)
+        page.setContentsMargins(16, 10, 16, 12)
+        page.setSpacing(10)
 
         # Header / brand area. If the original logo asset is packaged at
         # assets/epix_logo.png it is shown; otherwise use a clean wordmark.
         header = QHBoxLayout()
         header.setSpacing(16)
         self.logo_label = QLabel()
-        self.logo_label.setFixedSize(730, 190)
+        self.logo_label.setFixedSize(730, 170)
         logo_path = resource_path("assets/epix_logo.png")
         if logo_path.exists():
             # Trim the empty black canvas around the supplied logo before sizing it.
@@ -403,7 +403,7 @@ class MainWindow(QMainWindow):
             pix = QPixmap()
             pix.loadFromData(logo_buffer.getvalue())
             self.logo_label.setPixmap(
-                pix.scaled(700, 174, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pix.scaled(700, 155, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
             self.logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         else:
@@ -447,7 +447,7 @@ class MainWindow(QMainWindow):
         preview_layout.addWidget(preview_head)
         self.preview = QLabel("Choose photos to preview\n\n35 × 45 mm ID format")
         self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setMinimumSize(250, 330)
+        self.preview.setMinimumSize(220, 250)
         self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.preview.setObjectName("photoPreview")
         preview_layout.addWidget(self.preview, 1)
@@ -550,7 +550,7 @@ class MainWindow(QMainWindow):
         log_layout = QVBoxLayout(log_group)
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMaximumHeight(112)
+        self.log.setMaximumHeight(84)
         self.log.setPlaceholderText("Processing messages and saved-photo results will appear here.")
         log_layout.addWidget(self.log)
         page.addWidget(log_group)
