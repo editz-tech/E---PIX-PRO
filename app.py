@@ -7,8 +7,9 @@ from shadow_matte import build_subject_alpha
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter, ImageChops
-from PySide6.QtCore import QObject, Signal, QThread, QTimer
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox)
+from PySide6.QtCore import QObject, Signal, QThread, QTimer, Qt, QUrl
+from PySide6.QtGui import QPixmap, QDesktopServices
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox, QFrame, QSizePolicy)
 
 APP_NAME = "E-PIX PRO"
 RATIO = 35 / 45
@@ -362,139 +363,377 @@ class Worker(QObject):
 
 class MainWindow(QMainWindow):
     def __init__(self):
-        super().__init__(); self.setWindowTitle(APP_NAME); self.resize(900, 650)
+        super().__init__()
+        self.setWindowTitle(APP_NAME)
+        self.resize(1240, 790)
+        self.setMinimumSize(1040, 680)
         self.files = []
-        root = QWidget(); self.setCentralWidget(root); layout = QVBoxLayout(root)
-        title = QLabel("E-PIX PRO"); title.setStyleSheet("font-size:28px;font-weight:700;color:#58a6ff;")
-        layout.addWidget(title)
-        layout.addWidget(QLabel("OFFLINE PASSPORT & ID PHOTO STUDIO  •  35 × 45 mm  •  Demo-resolution output"))
-        group = QGroupBox("1. Select photos"); row = QHBoxLayout(group)
-        self.count = QLabel("No photos selected")
-        for label, handler in [("Choose Photo", self.choose_single), ("Choose Multiple Photos", self.choose_multiple), ("Choose Folder", self.choose_folder)]:
-            b = QPushButton(label); b.clicked.connect(handler); row.addWidget(b)
-        row.addWidget(self.count); layout.addWidget(group)
-        outbox = QGroupBox("2. Output folder"); outrow = QHBoxLayout(outbox)
-        self.output = QLineEdit(str(Path.home() / "Pictures" / "E-Pix Output"))
-        browse = QPushButton("Browse"); browse.clicked.connect(self.choose_output)
-        outrow.addWidget(self.output); outrow.addWidget(browse); layout.addWidget(outbox)
-        self.preserve = QCheckBox("Preserve original filename (required)"); self.preserve.setChecked(True); self.preserve.setEnabled(False); layout.addWidget(self.preserve)
-        self.start = QPushButton("START PROCESSING"); self.start.setMinimumHeight(48)
-        self.start.setStyleSheet("background:#1769aa;color:white;font-weight:700;border-radius:7px;")
-        self.start.clicked.connect(self.start_processing); layout.addWidget(self.start)
-        self.progress = QProgressBar(); layout.addWidget(self.progress)
-        self.status = QLabel("Ready • Original photos are never modified."); layout.addWidget(self.status)
-        self.elapsed_label = QLabel("Elapsed time: 00:00")
-        self.elapsed_label.setStyleSheet("font-size:12pt;font-weight:700;color:#58a6ff;")
-        layout.addWidget(self.elapsed_label)
-        self.elapsed_timer = QTimer(self); self.elapsed_timer.setInterval(250)
-        self.elapsed_timer.timeout.connect(self.update_elapsed_time)
         self.processing_started = None
-        self.log = QTextEdit(); self.log.setReadOnly(True); layout.addWidget(self.log)
-        note = QLabel("OFFLINE PROCESSING • No API key, subscription, or internet connection required. Original facial pixels are not generatively recreated; geometric alignment and background removal may still affect image positioning. Review every result before official use.")
-        note.setWordWrap(True); note.setStyleSheet("color:#e3b341;"); layout.addWidget(note)
+        self.thread = None
+        self.worker = None
+
+        root = QWidget()
+        root.setObjectName("root")
+        self.setCentralWidget(root)
+        page = QVBoxLayout(root)
+        page.setContentsMargins(26, 22, 26, 22)
+        page.setSpacing(18)
+
+        # Header / brand area. If the original logo asset is packaged at
+        # assets/epix_logo.png it is shown; otherwise use a clean wordmark.
+        header = QHBoxLayout()
+        header.setSpacing(16)
+        self.logo_label = QLabel()
+        self.logo_label.setFixedSize(220, 82)
+        logo_path = resource_path("assets/epix_logo.png")
+        if logo_path.exists():
+            pix = QPixmap(str(logo_path))
+            self.logo_label.setPixmap(pix.scaled(220, 82, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        else:
+            self.logo_label.setText("E-PIX <span style='color:#1685ff'>PRO</span>")
+            self.logo_label.setTextFormat(Qt.RichText)
+            self.logo_label.setStyleSheet("font-size:27px;font-weight:800;letter-spacing:2px;color:#ffffff;")
+            self.logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        header.addWidget(self.logo_label)
+        brand_copy = QVBoxLayout()
+        brand_title = QLabel("Professional ID Photo Studio")
+        brand_title.setStyleSheet("font-size:17px;font-weight:700;color:#f4f7fb;")
+        brand_sub = QLabel("FAST  •  ACCURATE  •  OFFLINE")
+        brand_sub.setStyleSheet("font-size:9pt;letter-spacing:2px;color:#8ea6c2;")
+        brand_copy.addWidget(brand_title)
+        brand_copy.addWidget(brand_sub)
+        header.addLayout(brand_copy)
+        header.addStretch(1)
+
+        self.home_button = QPushButton("⌂  Home")
+        self.home_button.setObjectName("navActive")
+        self.home_button.clicked.connect(lambda: self.status.setText("Home • Ready to process"))
+        output_nav = QPushButton("▣  Output Folder")
+        output_nav.clicked.connect(self.open_output_folder)
+        about_nav = QPushButton("ⓘ  About")
+        about_nav.clicked.connect(self.show_about)
+        for b in (self.home_button, output_nav, about_nav):
+            b.setMinimumHeight(42)
+            header.addWidget(b)
+        page.addLayout(header)
+
+        hero = QHBoxLayout()
+        hero_title = QLabel("Your photo workflow, simplified.")
+        hero_title.setStyleSheet("font-size:22px;font-weight:750;color:#ffffff;")
+        hero.addWidget(hero_title)
+        hero.addStretch(1)
+        self.selection_summary = QLabel("0 PHOTOS SELECTED")
+        self.selection_summary.setStyleSheet("color:#8fbfff;font-size:9pt;font-weight:700;letter-spacing:1px;")
+        hero.addWidget(self.selection_summary)
+        page.addLayout(hero)
+
+        content = QHBoxLayout()
+        content.setSpacing(16)
+
+        # Left card: live source-photo preview.
+        preview_card = QFrame()
+        preview_card.setObjectName("panel")
+        preview_layout = QVBoxLayout(preview_card)
+        preview_layout.setContentsMargins(16, 16, 16, 16)
+        preview_layout.setSpacing(12)
+        preview_head = QLabel("PHOTO PREVIEW")
+        preview_head.setObjectName("panelTitle")
+        preview_layout.addWidget(preview_head)
+        self.preview = QLabel("Choose photos to preview\n\n35 × 45 mm ID format")
+        self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.setMinimumSize(250, 330)
+        self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.preview.setObjectName("photoPreview")
+        preview_layout.addWidget(self.preview, 1)
+        self.count = QLabel("No photos selected")
+        self.count.setStyleSheet("color:#9db0c7;font-weight:600;")
+        preview_layout.addWidget(self.count)
+        select_row = QHBoxLayout()
+        add_button = QPushButton("＋  Add Photos")
+        add_button.setObjectName("primary")
+        add_button.clicked.connect(self.choose_multiple)
+        folder_button = QPushButton("Choose Folder")
+        folder_button.clicked.connect(self.choose_folder)
+        select_row.addWidget(add_button, 2)
+        select_row.addWidget(folder_button, 1)
+        preview_layout.addLayout(select_row)
+        content.addWidget(preview_card, 5)
+
+        # Centre card: quick actions and output destination.
+        actions_card = QFrame()
+        actions_card.setObjectName("panel")
+        actions_layout = QVBoxLayout(actions_card)
+        actions_layout.setContentsMargins(16, 16, 16, 16)
+        actions_layout.setSpacing(14)
+        actions_title = QLabel("QUICK ACTIONS")
+        actions_title.setObjectName("panelTitle")
+        actions_layout.addWidget(actions_title)
+        actions_grid = QGridLayout()
+        actions_grid.setSpacing(10)
+
+        add_tile = QPushButton("▧\nAdd Photos\nSelect image files")
+        add_tile.clicked.connect(self.choose_multiple)
+        process_tile = QPushButton("▶\nProcess\nStart processing")
+        process_tile.setObjectName("primary")
+        process_tile.clicked.connect(self.start_processing)
+        results_tile = QPushButton("◉\nView Results\nOpen output folder")
+        results_tile.clicked.connect(self.open_output_folder)
+        export_tile = QPushButton("⇩\nExport All\nOpen completed photos")
+        export_tile.clicked.connect(self.open_output_folder)
+        for tile in (add_tile, process_tile, results_tile, export_tile):
+            tile.setMinimumHeight(112)
+            tile.setCursor(Qt.PointingHandCursor)
+            tile.setStyleSheet(tile.styleSheet() + "QPushButton {font-size:12pt;font-weight:700;}")
+        actions_grid.addWidget(add_tile, 0, 0)
+        actions_grid.addWidget(process_tile, 0, 1)
+        actions_grid.addWidget(results_tile, 1, 0)
+        actions_grid.addWidget(export_tile, 1, 1)
+        actions_layout.addLayout(actions_grid)
+        actions_layout.addStretch(1)
+
+        output_title = QLabel("OUTPUT LOCATION")
+        output_title.setObjectName("panelTitle")
+        actions_layout.addWidget(output_title)
+        output_row = QHBoxLayout()
+        self.output = QLineEdit(str(Path.home() / "Pictures" / "E-Pix Output"))
+        self.output.setPlaceholderText("Choose output folder")
+        browse = QPushButton("Browse")
+        browse.clicked.connect(self.choose_output)
+        output_row.addWidget(self.output, 1)
+        output_row.addWidget(browse)
+        actions_layout.addLayout(output_row)
+        self.preserve = QCheckBox("Preserve original filenames")
+        self.preserve.setChecked(True)
+        self.preserve.setEnabled(False)
+        actions_layout.addWidget(self.preserve)
+        clear_button = QPushButton("Clear Selection")
+        clear_button.clicked.connect(self.clear_selection)
+        actions_layout.addWidget(clear_button)
+        content.addWidget(actions_card, 5)
+
+        # Right card: batch progress and elapsed timer.
+        progress_card = QFrame()
+        progress_card.setObjectName("panel")
+        progress_layout = QVBoxLayout(progress_card)
+        progress_layout.setContentsMargins(16, 16, 16, 16)
+        progress_layout.setSpacing(13)
+        progress_title = QLabel("PROCESSING")
+        progress_title.setObjectName("panelTitle")
+        progress_layout.addWidget(progress_title)
+        self.progress_percent = QLabel("0%")
+        self.progress_percent.setAlignment(Qt.AlignCenter)
+        self.progress_percent.setStyleSheet("font-size:32px;font-weight:800;color:#ffffff;")
+        progress_layout.addWidget(self.progress_percent)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(13)
+        progress_layout.addWidget(self.progress)
+        self.status = QLabel("Ready to process")
+        self.status.setWordWrap(True)
+        self.status.setStyleSheet("color:#a8bad0;font-weight:600;")
+        progress_layout.addWidget(self.status)
+        progress_layout.addSpacing(12)
+        timer_caption = QLabel("ELAPSED TIME")
+        timer_caption.setObjectName("panelTitle")
+        progress_layout.addWidget(timer_caption)
+        self.elapsed_label = QLabel("00:00:00")
+        self.elapsed_label.setStyleSheet("font-size:25px;font-weight:800;color:#69adff;")
+        progress_layout.addWidget(self.elapsed_label)
+        self.elapsed_timer = QTimer(self)
+        self.elapsed_timer.setInterval(250)
+        self.elapsed_timer.timeout.connect(self.update_elapsed_time)
+        self.batch_label = QLabel("Total: 0 photos")
+        self.batch_label.setStyleSheet("color:#8ea6c2;")
+        progress_layout.addWidget(self.batch_label)
+        progress_layout.addStretch(1)
+        self.start = QPushButton("▶  START PROCESSING")
+        self.start.setObjectName("primary")
+        self.start.setMinimumHeight(52)
+        self.start.clicked.connect(self.start_processing)
+        progress_layout.addWidget(self.start)
+        content.addWidget(progress_card, 3)
+        page.addLayout(content, 1)
+
+        # Activity log remains available below the dashboard.
+        log_group = QGroupBox("ACTIVITY / RESULTS")
+        log_layout = QVBoxLayout(log_group)
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumHeight(112)
+        self.log.setPlaceholderText("Processing messages and saved-photo results will appear here.")
+        log_layout.addWidget(self.log)
+        page.addWidget(log_group)
+
+        note = QLabel("OFFLINE PROCESSING  •  35 × 45 mm  •  Original photos are never modified. Review every result before official use.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color:#758aa3;font-size:9pt;")
+        page.addWidget(note)
+
         self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background: #0b1220;
-                color: #e7edf7;
-                font-family: "Segoe UI";
-                font-size: 10pt;
-            }
-            QLabel { color: #dce6f3; }
-            QGroupBox {
-                background: #111c2d;
-                border: 1px solid #263a55;
-                border-radius: 12px;
-                margin-top: 14px;
-                padding: 14px 12px 12px 12px;
-                font-size: 10pt;
-                font-weight: 600;
-                color: #9fc5f5;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-            }
+            QMainWindow, QWidget#root { background:#07090d; color:#edf3fb; font-family:"Segoe UI"; }
+            QWidget { color:#edf3fb; font-family:"Segoe UI"; font-size:10pt; }
+            QFrame#panel { background:#11151c; border:1px solid #29313d; border-radius:16px; }
+            QLabel#panelTitle { color:#8fa8c5; font-size:9pt; font-weight:800; letter-spacing:1.3px; }
+            QLabel#photoPreview { background:#090c11; border:1px dashed #39485b; border-radius:12px; color:#71849b; font-size:11pt; }
             QPushButton {
-                background: #1b2b40;
-                color: #edf5ff;
-                border: 1px solid #36516f;
-                border-radius: 8px;
-                padding: 10px 14px;
-                min-height: 18px;
-                font-weight: 600;
+                background:#1a202a; color:#edf4ff; border:1px solid #303d4e;
+                border-radius:10px; padding:10px 12px; min-height:20px; font-weight:600;
             }
-            QPushButton:hover { background: #263f5c; border-color: #5b91c8; }
-            QPushButton:pressed { background: #142338; }
-            QPushButton:disabled { color: #718096; background: #172235; border-color: #263246; }
+            QPushButton:hover { background:#242f3e; border-color:#4b83bd; }
+            QPushButton:pressed { background:#101722; }
+            QPushButton:disabled { color:#667487; background:#151a22; border-color:#252d38; }
+            QPushButton#primary, QPushButton#navActive {
+                background:#0867d8; border:1px solid #2389ff; color:white; font-weight:800;
+            }
+            QPushButton#primary:hover, QPushButton#navActive:hover { background:#1478ed; }
             QLineEdit, QTextEdit {
-                background: #0d1726;
-                color: #edf4ff;
-                border: 1px solid #2c405a;
-                border-radius: 7px;
-                padding: 9px;
-                selection-background-color: #2878bd;
+                background:#090e15; color:#edf4ff; border:1px solid #2a394b;
+                border-radius:8px; padding:9px; selection-background-color:#176fd0;
             }
-            QLineEdit:focus, QTextEdit:focus { border: 1px solid #4b9ce2; }
-            QProgressBar {
-                background: #172438;
-                border: 1px solid #2d425d;
-                border-radius: 7px;
-                min-height: 14px;
-                text-align: center;
-                color: #ffffff;
+            QLineEdit:focus, QTextEdit:focus { border:1px solid #2788ed; }
+            QProgressBar { background:#252d38; border:0; border-radius:6px; }
+            QProgressBar::chunk { background:#1684ff; border-radius:6px; }
+            QCheckBox { spacing:8px; color:#9fb2c9; }
+            QCheckBox::indicator { width:16px; height:16px; border:1px solid #4d6683; border-radius:4px; background:#0b1119; }
+            QCheckBox::indicator:checked { background:#1684ff; border-color:#1684ff; }
+            QGroupBox {
+                background:#0d1118; border:1px solid #252e3b; border-radius:12px;
+                margin-top:12px; padding:12px; color:#8fa8c5; font-weight:700;
             }
-            QProgressBar::chunk { background: #2587ce; border-radius: 6px; }
-            QCheckBox { spacing: 8px; color: #b9c9dc; }
-            QCheckBox::indicator {
-                width: 16px; height: 16px;
-                border: 1px solid #52708f;
-                border-radius: 4px;
-                background: #0d1726;
-            }
-            QCheckBox::indicator:checked { background: #2587ce; border-color: #2587ce; }
+            QGroupBox::title { subcontrol-origin:margin; left:12px; padding:0 6px; }
         """)
+
     def set_files(self, files):
-        self.files = list(dict.fromkeys(Path(f) for f in files if Path(f).suffix.lower() in {".jpg",".jpeg",".png",".bmp",".webp",".tif",".tiff"}))
-        self.count.setText(f"{len(self.files)} photo(s) selected")
+        self.files = list(dict.fromkeys(
+            Path(f) for f in files
+            if Path(f).suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+        ))
+        count = len(self.files)
+        self.count.setText(f"{count} photo(s) selected")
+        self.selection_summary.setText(f"{count} PHOTOS SELECTED")
+        self.batch_label.setText(f"Total: {count} photos")
+        if self.files:
+            pix = QPixmap(str(self.files[0]))
+            if not pix.isNull():
+                self.preview.setPixmap(pix.scaled(
+                    self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                ))
+                self.preview.setText("")
+            else:
+                self.preview.setPixmap(QPixmap())
+                self.preview.setText("Preview unavailable")
+        else:
+            self.preview.setPixmap(QPixmap())
+            self.preview.setText("Choose photos to preview\n\n35 × 45 mm ID format")
+
+    def clear_selection(self):
+        if self.start.isEnabled():
+            self.set_files([])
+            self.log.clear()
+            self.progress.setValue(0)
+            self.progress_percent.setText("0%")
+            self.status.setText("Ready to process")
+            self.elapsed_label.setText("00:00:00")
+
     def choose_single(self):
-        f,_ = QFileDialog.getOpenFileName(self,"Choose photo","","Images (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff)")
-        if f: self.set_files([f])
+        f, _ = QFileDialog.getOpenFileName(
+            self, "Choose photo", "",
+            "Images (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff)"
+        )
+        if f:
+            self.set_files([f])
+
     def choose_multiple(self):
-        fs,_ = QFileDialog.getOpenFileNames(self,"Choose multiple photos","","Images (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff)")
-        if fs: self.set_files(fs)
+        fs, _ = QFileDialog.getOpenFileNames(
+            self, "Choose multiple photos", "",
+            "Images (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff)"
+        )
+        if fs:
+            self.set_files(fs)
+
     def choose_folder(self):
-        d = QFileDialog.getExistingDirectory(self,"Choose photo folder")
-        if d: self.set_files([p for p in Path(d).iterdir() if p.is_file()])
+        d = QFileDialog.getExistingDirectory(self, "Choose photo folder")
+        if d:
+            self.set_files([p for p in Path(d).iterdir() if p.is_file()])
+
     def choose_output(self):
-        d = QFileDialog.getExistingDirectory(self,"Choose output folder",self.output.text())
-        if d: self.output.setText(d)
+        d = QFileDialog.getExistingDirectory(self, "Choose output folder", self.output.text())
+        if d:
+            self.output.setText(d)
+
+    def open_output_folder(self):
+        folder = Path(self.output.text()).expanduser()
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def show_about(self):
+        QMessageBox.about(
+            self, "About E-PIX PRO",
+            "E-PIX PRO\nProfessional offline passport and ID photo studio.\n35 × 45 mm output."
+        )
+
     def start_processing(self):
-        if not self.files: QMessageBox.warning(self,"No photos","Choose one or more photos first."); return
-        self.start.setEnabled(False); self.progress.setValue(0); self.log.clear()
+        if not self.files:
+            QMessageBox.warning(self, "No photos", "Choose one or more photos first.")
+            return
+        self.start.setEnabled(False)
+        self.progress.setMaximum(max(1, len(self.files)))
+        self.progress.setValue(0)
+        self.progress_percent.setText("0%")
+        self.log.clear()
         self.processing_started = time.perf_counter()
-        self.elapsed_label.setText("Elapsed time: 00:00")
+        self.elapsed_label.setText("00:00:00")
         self.elapsed_timer.start()
-        self.thread = QThread(); self.worker = Worker(self.files, Path(self.output.text()).expanduser())
-        self.worker.moveToThread(self.thread); self.thread.started.connect(self.worker.run)
-        self.worker.progress.connect(self.on_progress); self.worker.done.connect(self.on_done); self.worker.failed.connect(self.on_failed)
-        self.worker.done.connect(self.thread.quit); self.worker.failed.connect(self.thread.quit)
-        self.thread.finished.connect(self.thread.deleteLater); self.thread.start()
+        self.status.setText("Starting offline processing…")
+        self.thread = QThread()
+        self.worker = Worker(self.files, Path(self.output.text()).expanduser())
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.done.connect(self.on_done)
+        self.worker.failed.connect(self.on_failed)
+        self.worker.done.connect(self.thread.quit)
+        self.worker.failed.connect(self.thread.quit)
+        self.thread.finished.connect(self.thread.deleteLater)
+        self.thread.start()
+
     def update_elapsed_time(self):
-        if self.processing_started is None: return
+        if self.processing_started is None:
+            return
         seconds = int(time.perf_counter() - self.processing_started)
-        minutes, seconds = divmod(seconds, 60)
-        hours, minutes = divmod(minutes, 60)
-        self.elapsed_label.setText(f"Elapsed time: {hours:02d}:{minutes:02d}:{seconds:02d}")
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        self.elapsed_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+
     def on_progress(self, current, total, message):
-        self.progress.setMaximum(total); self.progress.setValue(current); self.status.setText(f"Processing {current} of {total}"); self.log.append(message)
+        self.progress.setMaximum(max(1, total))
+        self.progress.setValue(current)
+        percent = int((current / max(1, total)) * 100)
+        self.progress_percent.setText(f"{percent}%")
+        self.status.setText(f"Processing {current} of {total}")
+        self.log.append(message)
+
     def on_done(self, ok, errors):
-        self.elapsed_timer.stop(); self.update_elapsed_time()
-        self.start.setEnabled(True); self.status.setText(f"Finished • {ok} successful • {errors} failed"); self.log.append(f"Finished: {ok} successful, {errors} failed.")
+        self.elapsed_timer.stop()
+        self.update_elapsed_time()
+        self.start.setEnabled(True)
+        self.status.setText(f"Finished • {ok} successful • {errors} failed")
+        self.log.append(f"Finished: {ok} successful, {errors} failed.")
+        self.batch_label.setText(f"Completed: {ok} photos • Failed: {errors}")
+
     def on_failed(self, message):
-        self.elapsed_timer.stop(); self.update_elapsed_time()
-        self.start.setEnabled(True); self.status.setText("Processing could not start."); self.log.append(message)
-        QMessageBox.critical(self,"Processing error","Offline processing engine could not start. See log for details.")
+        self.elapsed_timer.stop()
+        self.update_elapsed_time()
+        self.start.setEnabled(True)
+        self.status.setText("Processing could not start.")
+        self.log.append(message)
+        QMessageBox.critical(
+            self, "Processing error",
+            "Offline processing engine could not start. See activity log for details."
+        )
 
 if __name__ == "__main__":
     app = QApplication(sys.argv); window = MainWindow(); window.show(); sys.exit(app.exec())
