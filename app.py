@@ -7,7 +7,7 @@ from shadow_matte import build_subject_alpha
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter, ImageChops
-from PySide6.QtCore import QObject, Signal, QThread, QTimer, Qt, QUrl
+from PySide6.QtCore import QObject, Signal, QThread, QTimer, Qt, QUrl, QSettings
 from PySide6.QtGui import QPixmap, QDesktopServices
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox, QFrame, QSizePolicy)
 
@@ -368,6 +368,7 @@ class MainWindow(QMainWindow):
         self.resize(1240, 790)
         self.setMinimumSize(1040, 680)
         self.files = []
+        self.settings = QSettings("EPIX", "E-PIX PRO")
         self.processing_started = None
         self.thread = None
         self.worker = None
@@ -384,11 +385,11 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         header.setSpacing(16)
         self.logo_label = QLabel()
-        self.logo_label.setFixedSize(220, 82)
+        self.logo_label.setFixedSize(330, 100)
         logo_path = resource_path("assets/epix_logo.png")
         if logo_path.exists():
             pix = QPixmap(str(logo_path))
-            self.logo_label.setPixmap(pix.scaled(220, 82, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.logo_label.setPixmap(pix.scaled(320, 94, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             self.logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         else:
             self.logo_label.setText("E-PIX <span style='color:#1685ff'>PRO</span>")
@@ -396,32 +397,21 @@ class MainWindow(QMainWindow):
             self.logo_label.setStyleSheet("font-size:27px;font-weight:800;letter-spacing:2px;color:#ffffff;")
             self.logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         header.addWidget(self.logo_label)
-        brand_copy = QVBoxLayout()
-        brand_title = QLabel("Professional ID Photo Studio")
-        brand_title.setStyleSheet("font-size:17px;font-weight:700;color:#f4f7fb;")
-        brand_sub = QLabel("FAST  •  ACCURATE  •  OFFLINE")
-        brand_sub.setStyleSheet("font-size:9pt;letter-spacing:2px;color:#8ea6c2;")
-        brand_copy.addWidget(brand_title)
-        brand_copy.addWidget(brand_sub)
-        header.addLayout(brand_copy)
         header.addStretch(1)
 
         self.home_button = QPushButton("⌂  Home")
         self.home_button.setObjectName("navActive")
         self.home_button.clicked.connect(lambda: self.status.setText("Home • Ready to process"))
-        output_nav = QPushButton("▣  Output Folder")
-        output_nav.clicked.connect(self.open_output_folder)
+        settings_nav = QPushButton("⚙  Settings")
+        settings_nav.clicked.connect(self.choose_output)
         about_nav = QPushButton("ⓘ  About")
         about_nav.clicked.connect(self.show_about)
-        for b in (self.home_button, output_nav, about_nav):
+        for b in (self.home_button, settings_nav, about_nav):
             b.setMinimumHeight(42)
             header.addWidget(b)
         page.addLayout(header)
 
         hero = QHBoxLayout()
-        hero_title = QLabel("Your photo workflow, simplified.")
-        hero_title.setStyleSheet("font-size:22px;font-weight:750;color:#ffffff;")
-        hero.addWidget(hero_title)
         hero.addStretch(1)
         self.selection_summary = QLabel("0 PHOTOS SELECTED")
         self.selection_summary.setStyleSheet("color:#8fbfff;font-size:9pt;font-weight:700;letter-spacing:1px;")
@@ -446,18 +436,6 @@ class MainWindow(QMainWindow):
         self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.preview.setObjectName("photoPreview")
         preview_layout.addWidget(self.preview, 1)
-        self.count = QLabel("No photos selected")
-        self.count.setStyleSheet("color:#9db0c7;font-weight:600;")
-        preview_layout.addWidget(self.count)
-        select_row = QHBoxLayout()
-        add_button = QPushButton("＋  Add Photos")
-        add_button.setObjectName("primary")
-        add_button.clicked.connect(self.choose_multiple)
-        folder_button = QPushButton("Choose Folder")
-        folder_button.clicked.connect(self.choose_folder)
-        select_row.addWidget(add_button, 2)
-        select_row.addWidget(folder_button, 1)
-        preview_layout.addLayout(select_row)
         content.addWidget(preview_card, 5)
 
         # Centre card: quick actions and output destination.
@@ -472,23 +450,23 @@ class MainWindow(QMainWindow):
         actions_grid = QGridLayout()
         actions_grid.setSpacing(10)
 
-        add_tile = QPushButton("▧\nAdd Photos\nSelect image files")
+        add_tile = QPushButton("▧  Add Photos")
         add_tile.clicked.connect(self.choose_multiple)
-        process_tile = QPushButton("▶\nProcess\nStart processing")
-        process_tile.setObjectName("primary")
-        process_tile.clicked.connect(self.start_processing)
-        results_tile = QPushButton("◉\nView Results\nOpen output folder")
+        folder_tile = QPushButton("▣  Choose Folder")
+        folder_tile.clicked.connect(self.choose_folder)
+        output_tile = QPushButton("▤  Output Folder")
+        output_tile.clicked.connect(self.choose_output)
+        results_tile = QPushButton("◉  View Result")
         results_tile.clicked.connect(self.open_output_folder)
-        export_tile = QPushButton("⇩\nExport All\nOpen completed photos")
-        export_tile.clicked.connect(self.open_output_folder)
-        for tile in (add_tile, process_tile, results_tile, export_tile):
-            tile.setMinimumHeight(112)
+        for tile in (add_tile, folder_tile, output_tile, results_tile):
+            tile.setMinimumHeight(76)
             tile.setCursor(Qt.PointingHandCursor)
-            tile.setStyleSheet(tile.styleSheet() + "QPushButton {font-size:12pt;font-weight:700;}")
+            tile.setStyleSheet(tile.styleSheet() + "QPushButton {font-size:11pt;font-weight:700;padding:8px;}")
+        add_tile.setObjectName("primary")
         actions_grid.addWidget(add_tile, 0, 0)
-        actions_grid.addWidget(process_tile, 0, 1)
-        actions_grid.addWidget(results_tile, 1, 0)
-        actions_grid.addWidget(export_tile, 1, 1)
+        actions_grid.addWidget(folder_tile, 0, 1)
+        actions_grid.addWidget(output_tile, 1, 0)
+        actions_grid.addWidget(results_tile, 1, 1)
         actions_layout.addLayout(actions_grid)
         actions_layout.addStretch(1)
 
@@ -496,13 +474,15 @@ class MainWindow(QMainWindow):
         output_title.setObjectName("panelTitle")
         actions_layout.addWidget(output_title)
         output_row = QHBoxLayout()
-        self.output = QLineEdit(str(Path.home() / "Pictures" / "E-Pix Output"))
+        default_output = str(self.settings.value("default_output", str(Path.home() / "Pictures" / "E-Pix Output")))
+        self.output = QLineEdit(default_output)
         self.output.setPlaceholderText("Choose output folder")
-        browse = QPushButton("Browse")
-        browse.clicked.connect(self.choose_output)
         output_row.addWidget(self.output, 1)
-        output_row.addWidget(browse)
         actions_layout.addLayout(output_row)
+        self.default_output_check = QCheckBox("Set as default")
+        self.default_output_check.setChecked(bool(self.settings.value("default_output", "")))
+        self.default_output_check.toggled.connect(self.save_default_output)
+        actions_layout.addWidget(self.default_output_check)
         self.preserve = QCheckBox("Preserve original filenames")
         self.preserve.setChecked(True)
         self.preserve.setEnabled(False)
@@ -567,10 +547,6 @@ class MainWindow(QMainWindow):
         log_layout.addWidget(self.log)
         page.addWidget(log_group)
 
-        note = QLabel("OFFLINE PROCESSING  •  35 × 45 mm  •  Original photos are never modified. Review every result before official use.")
-        note.setWordWrap(True)
-        note.setStyleSheet("color:#758aa3;font-size:9pt;")
-        page.addWidget(note)
 
         self.setStyleSheet("""
             QMainWindow, QWidget#root { background:#07090d; color:#edf3fb; font-family:"Segoe UI"; }
@@ -612,7 +588,6 @@ class MainWindow(QMainWindow):
             if Path(f).suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
         ))
         count = len(self.files)
-        self.count.setText(f"{count} photo(s) selected")
         self.selection_summary.setText(f"{count} PHOTOS SELECTED")
         self.batch_label.setText(f"Total: {count} photos")
         if self.files:
@@ -663,6 +638,14 @@ class MainWindow(QMainWindow):
         d = QFileDialog.getExistingDirectory(self, "Choose output folder", self.output.text())
         if d:
             self.output.setText(d)
+            if self.default_output_check.isChecked():
+                self.settings.setValue("default_output", d)
+
+    def save_default_output(self, checked):
+        if checked:
+            self.settings.setValue("default_output", self.output.text().strip())
+        else:
+            self.settings.remove("default_output")
 
     def open_output_folder(self):
         folder = Path(self.output.text()).expanduser()
