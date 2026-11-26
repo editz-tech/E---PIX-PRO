@@ -388,28 +388,40 @@ class MainWindow(QMainWindow):
         self.logo_label = QLabel()
         self.logo_label.setFixedSize(730, 170)
         logo_path = resource_path("assets/epix_logo.png")
+        logo_loaded = False
         if logo_path.exists():
-            # Trim the empty black canvas around the supplied logo before sizing it.
-            # Keep the logo's proportions; never stretch or distort the artwork.
-            logo_image = Image.open(logo_path).convert("RGBA")
-            logo_rgb = logo_image.convert("RGB")
-            logo_bbox = ImageChops.difference(
-                logo_rgb, Image.new("RGB", logo_rgb.size, (0, 0, 0))
-            ).getbbox()
-            if logo_bbox:
-                logo_image = logo_image.crop(logo_bbox)
-            logo_buffer = BytesIO()
-            logo_image.save(logo_buffer, format="PNG")
-            pix = QPixmap()
-            pix.loadFromData(logo_buffer.getvalue())
-            self.logo_label.setPixmap(
-                pix.scaled(700, 155, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            )
-            self.logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        else:
+            try:
+                # Load and fully decode inside the try block. A damaged PNG must
+                # never prevent the whole application from starting.
+                with Image.open(logo_path) as source_image:
+                    source_image.load()
+                    logo_image = source_image.convert("RGBA")
+                # Trim the empty black canvas without changing the logo proportions.
+                logo_rgb = logo_image.convert("RGB")
+                logo_bbox = ImageChops.difference(
+                    logo_rgb, Image.new("RGB", logo_rgb.size, (0, 0, 0))
+                ).getbbox()
+                if logo_bbox:
+                    logo_image = logo_image.crop(logo_bbox)
+                logo_buffer = BytesIO()
+                logo_image.save(logo_buffer, format="PNG")
+                pix = QPixmap()
+                if not pix.loadFromData(logo_buffer.getvalue()):
+                    raise ValueError("Qt could not decode the prepared E-PIX logo")
+                self.logo_label.setPixmap(
+                    pix.scaled(700, 155, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+                self.logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                logo_loaded = True
+            except Exception as logo_error:
+                # Keep startup reliable if the packaged image is corrupt or incomplete.
+                print(f"Warning: E-PIX logo could not be loaded: {logo_error}")
+        if not logo_loaded:
             self.logo_label.setText("E-PIX <span style='color:#1685ff'>PRO</span>")
             self.logo_label.setTextFormat(Qt.RichText)
-            self.logo_label.setStyleSheet("font-size:27px;font-weight:800;letter-spacing:2px;color:#ffffff;")
+            self.logo_label.setStyleSheet(
+                "font-size:27px;font-weight:800;letter-spacing:2px;color:#ffffff;"
+            )
             self.logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         header.addWidget(self.logo_label)
         header.addStretch(1)
