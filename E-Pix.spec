@@ -1,5 +1,5 @@
 from PyInstaller.utils.hooks import collect_all
-datas = [("models/u2net.onnx", "models")]
+datas = [("models/u2net.onnx", "models"), ("assets/epix_logo.png", "assets")]
 binaries = []
 hiddenimports = []
 for package in ("onnxruntime", "PIL", "numpy", "cv2", "mediapipe"):
