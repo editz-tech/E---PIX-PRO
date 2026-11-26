@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os, sys, traceback, time
+from io import BytesIO
 from pathlib import Path
 import cv2
 from portrait_alignment import straighten_portrait
@@ -365,8 +366,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1240, 790)
-        self.setMinimumSize(1040, 680)
+        self.resize(1360, 820)
+        self.setMinimumSize(1120, 720)
         self.files = []
         self.settings = QSettings("EPIX", "E-PIX PRO")
         self.processing_started = None
@@ -377,19 +378,33 @@ class MainWindow(QMainWindow):
         root.setObjectName("root")
         self.setCentralWidget(root)
         page = QVBoxLayout(root)
-        page.setContentsMargins(26, 22, 26, 22)
-        page.setSpacing(18)
+        page.setContentsMargins(22, 14, 22, 18)
+        page.setSpacing(14)
 
         # Header / brand area. If the original logo asset is packaged at
         # assets/epix_logo.png it is shown; otherwise use a clean wordmark.
         header = QHBoxLayout()
         header.setSpacing(16)
         self.logo_label = QLabel()
-        self.logo_label.setFixedSize(330, 100)
+        self.logo_label.setFixedSize(730, 190)
         logo_path = resource_path("assets/epix_logo.png")
         if logo_path.exists():
-            pix = QPixmap(str(logo_path))
-            self.logo_label.setPixmap(pix.scaled(320, 94, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            # Trim the empty black canvas around the supplied logo before sizing it.
+            # Keep the logo's proportions; never stretch or distort the artwork.
+            logo_image = Image.open(logo_path).convert("RGBA")
+            logo_rgb = logo_image.convert("RGB")
+            logo_bbox = ImageChops.difference(
+                logo_rgb, Image.new("RGB", logo_rgb.size, (0, 0, 0))
+            ).getbbox()
+            if logo_bbox:
+                logo_image = logo_image.crop(logo_bbox)
+            logo_buffer = BytesIO()
+            logo_image.save(logo_buffer, format="PNG")
+            pix = QPixmap()
+            pix.loadFromData(logo_buffer.getvalue())
+            self.logo_label.setPixmap(
+                pix.scaled(700, 174, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
             self.logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         else:
             self.logo_label.setText("E-PIX <span style='color:#1685ff'>PRO</span>")
@@ -468,21 +483,14 @@ class MainWindow(QMainWindow):
         actions_grid.addWidget(output_tile, 1, 0)
         actions_grid.addWidget(results_tile, 1, 1)
         actions_layout.addLayout(actions_grid)
-        actions_layout.addStretch(1)
 
-        output_title = QLabel("OUTPUT LOCATION")
-        output_title.setObjectName("panelTitle")
-        actions_layout.addWidget(output_title)
-        output_row = QHBoxLayout()
-        default_output = str(self.settings.value("default_output", str(Path.home() / "Pictures" / "E-Pix Output")))
+        # Keep the destination internally (not displayed in the green-marked area).
+        # Selecting an output folder automatically saves it as the next launch default.
+        default_output = str(self.settings.value(
+            "default_output", str(Path.home() / "Pictures" / "E-Pix Output")
+        ))
         self.output = QLineEdit(default_output)
-        self.output.setPlaceholderText("Choose output folder")
-        output_row.addWidget(self.output, 1)
-        actions_layout.addLayout(output_row)
-        self.default_output_check = QCheckBox("Set as default")
-        self.default_output_check.setChecked(bool(self.settings.value("default_output", "")))
-        self.default_output_check.toggled.connect(self.save_default_output)
-        actions_layout.addWidget(self.default_output_check)
+        self.output.hide()
         self.preserve = QCheckBox("Preserve original filenames")
         self.preserve.setChecked(True)
         self.preserve.setEnabled(False)
@@ -638,14 +646,7 @@ class MainWindow(QMainWindow):
         d = QFileDialog.getExistingDirectory(self, "Choose output folder", self.output.text())
         if d:
             self.output.setText(d)
-            if self.default_output_check.isChecked():
-                self.settings.setValue("default_output", d)
-
-    def save_default_output(self, checked):
-        if checked:
-            self.settings.setValue("default_output", self.output.text().strip())
-        else:
-            self.settings.remove("default_output")
+            self.settings.setValue("default_output", d)
 
     def open_output_folder(self):
         folder = Path(self.output.text()).expanduser()
