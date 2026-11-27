@@ -72,6 +72,15 @@ jobs:
           }
           Write-Host "Source model verified: $($model.Length) bytes"
 
+      - name: Prepare mascot icon for Windows executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $iconBase64 = (Get-Content "assets\epix_icon.png.b64" -Raw).Trim()
+          [System.IO.File]::WriteAllBytes("assets\epix_icon.png", [Convert]::FromBase64String($iconBase64))
+          python -c "from PIL import Image; Image.open('assets/epix_icon.png').save('assets/epix_icon.ico', format='ICO', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
+          if ($LASTEXITCODE -ne 0) { throw "Could not create the E-PIX PRO Windows icon." }
+
       - name: Build portable application folder
         run: pyinstaller --noconfirm --clean "E-Pix.spec"
 
