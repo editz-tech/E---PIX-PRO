@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "app.py"
+      - "assets/**"
       - "portrait_alignment.py"
       - "shadow_matte.py"
       - "ai_portrait.py"
@@ -62,6 +63,15 @@ jobs:
           if (-not (Test-Path $model -PathType Leaf)) { throw "Offline model is missing." }
           if ((Get-Item $model).Length -lt 50000000) { throw "Offline model is unexpectedly small." }
 
+      - name: Prepare mascot icon for Windows executable and installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $iconBase64 = (Get-Content "assets\epix_icon.png.b64" -Raw).Trim()
+          [System.IO.File]::WriteAllBytes("assets\epix_icon.png", [Convert]::FromBase64String($iconBase64))
+          python -c "from PIL import Image; Image.open('assets/epix_icon.png').save('assets/epix_icon.ico', format='ICO', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
+          if ($LASTEXITCODE -ne 0) { throw "Could not create the E-PIX PRO Windows icon." }
+
       - name: Build application
         shell: pwsh
         run: |
@@ -101,6 +111,7 @@ jobs:
           AppName=E-PIX PRO
           AppVersion=0.1.0
           AppPublisher=E-PIX PRO
+          SetupIconFile=..\\assets\\epix_icon.ico
           DefaultDirName={autopf}\E-PIX PRO
           DefaultGroupName=E-PIX PRO
           OutputDir=.
@@ -110,6 +121,7 @@ jobs:
           ArchitecturesInstallIn64BitMode=x64
           PrivilegesRequired=admin
           Uninstallable=yes
+          UninstallDisplayIcon={app}\\E-PIX PRO.exe
           CloseApplications=yes
           [Tasks]
           Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
