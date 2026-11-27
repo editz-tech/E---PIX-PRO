@@ -395,7 +395,7 @@ class MainWindow(QMainWindow):
                 renderer = QSvgRenderer(str(logo_path))
                 if not renderer.isValid():
                     raise ValueError("The packaged E-PIX logo SVG is invalid")
-                logo_size = renderer.defaultSize().scaled(590, 176, Qt.KeepAspectRatio)
+                logo_size = renderer.defaultSize().scaled(600, 176, Qt.KeepAspectRatio)
                 pix = QPixmap(logo_size)
                 pix.fill(Qt.transparent)
                 painter = QPainter(pix)
