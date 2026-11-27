@@ -367,8 +367,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1360, 780)
-        self.setMinimumSize(1080, 620)
+        self.resize(1600, 900)
+        self.setMinimumSize(1180, 720)
         self.files = []
         self.settings = QSettings("EPIX", "E-PIX PRO")
         self.processing_started = None
@@ -386,7 +386,7 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         header.setSpacing(16)
         self.logo_label = QLabel()
-        self.logo_label.setFixedSize(730, 250)
+        self.logo_label.setFixedSize(620, 190)
         self.logo_label.setStyleSheet("background:transparent;border:0;")
         logo_path = resource_path("assets/epix_logo.svg")
         logo_loaded = False
@@ -395,7 +395,7 @@ class MainWindow(QMainWindow):
                 renderer = QSvgRenderer(str(logo_path))
                 if not renderer.isValid():
                     raise ValueError("The packaged E-PIX logo SVG is invalid")
-                logo_size = renderer.defaultSize().scaled(700, 238, Qt.KeepAspectRatio)
+                logo_size = renderer.defaultSize().scaled(590, 176, Qt.KeepAspectRatio)
                 pix = QPixmap(logo_size)
                 pix.fill(Qt.transparent)
                 painter = QPainter(pix)
@@ -432,7 +432,7 @@ class MainWindow(QMainWindow):
         hero = QHBoxLayout()
         hero.addStretch(1)
         self.selection_summary = QLabel("0 PHOTOS SELECTED")
-        self.selection_summary.setStyleSheet("color:#8fbfff;font-size:9pt;font-weight:700;letter-spacing:1px;")
+        self.selection_summary.setStyleSheet("color:#f2f2f2;font-size:9pt;font-weight:700;letter-spacing:1px;")
         hero.addWidget(self.selection_summary)
         page.addLayout(hero)
 
@@ -487,19 +487,32 @@ class MainWindow(QMainWindow):
         actions_grid.addWidget(results_tile, 1, 1)
         actions_layout.addLayout(actions_grid)
 
-        # Keep the destination internally (not displayed in the green-marked area).
-        # Selecting an output folder automatically saves it as the next launch default.
-        default_output = str(self.settings.value(
-            "default_output", str(Path.home() / "Pictures" / "E-Pix Output")
-        ))
-        self.output = QLineEdit(default_output)
+        # Keep the selected destination internally. A folder becomes the
+        # permanent launch default only when the user enables the checkbox.
+        fallback_output = str(Path.home() / "Pictures" / "E-Pix Output")
+        saved_output = str(self.settings.value("default_output", fallback_output))
+        # Migrate older installs: previously selected folders were always saved.
+        saved_default_enabled = self.settings.value(
+            "default_output_enabled", self.settings.contains("default_output"),
+            type=bool
+        )
+        self.output = QLineEdit(saved_output if saved_default_enabled else fallback_output)
         self.output.hide()
+        self.default_output_checkbox = QCheckBox("Set as default")
+        self.default_output_checkbox.setChecked(saved_default_enabled)
+        self.default_output_checkbox.setToolTip(
+            "Remember this output folder and automatically use it whenever E-PIX PRO opens."
+        )
+        self.default_output_checkbox.toggled.connect(self.set_default_output_enabled)
+        actions_grid.addWidget(self.default_output_checkbox, 2, 0, alignment=Qt.AlignLeft)
+
         self.preserve = QCheckBox("Preserve original filenames")
         self.preserve.setChecked(True)
         self.preserve.setEnabled(False)
-        actions_layout.addWidget(self.preserve)
+        actions_grid.addWidget(self.preserve, 2, 1, alignment=Qt.AlignLeft)
         clear_button = QPushButton("Clear Selection")
         clear_button.clicked.connect(self.clear_selection)
+        clear_button.setMinimumHeight(52)
         actions_layout.addWidget(clear_button)
         content.addWidget(actions_card, 5)
 
@@ -560,37 +573,42 @@ class MainWindow(QMainWindow):
 
 
         self.setStyleSheet("""
-            QMainWindow, QWidget#root { background:#07090d; color:#edf3fb; font-family:"Segoe UI"; }
-            QWidget { color:#edf3fb; font-family:"Segoe UI"; font-size:10pt; }
-            QFrame#panel { background:#11151c; border:1px solid #29313d; border-radius:16px; }
-            QLabel#panelTitle { color:#8fa8c5; font-size:9pt; font-weight:800; letter-spacing:1.3px; }
-            QLabel#photoPreview { background:#090c11; border:1px dashed #39485b; border-radius:12px; color:#71849b; font-size:11pt; }
+            QMainWindow, QWidget#root { background:#000000; color:#f5f5f5; font-family:"Segoe UI"; }
+            QWidget { color:#f5f5f5; font-family:"Segoe UI"; font-size:10pt; }
+            QFrame#panel {
+                background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #101010,stop:0.45 #050505,stop:1 #0b0b0b);
+                border:1px solid #555555; border-radius:18px;
+            }
+            QLabel#panelTitle { color:#f4f4f4; font-size:10pt; font-weight:800; letter-spacing:0.5px; }
+            QLabel#photoPreview { background:#020202; border:1px dashed #b7b7b7; border-radius:12px; color:#eeeeee; font-size:12pt; }
             QPushButton {
-                background:#1a202a; color:#edf4ff; border:1px solid #303d4e;
-                border-radius:10px; padding:10px 12px; min-height:20px; font-weight:600;
+                background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #242424,stop:0.5 #080808,stop:1 #171717);
+                color:#f7f7f7; border:1px solid #777777; border-radius:13px;
+                padding:10px 12px; min-height:20px; font-weight:650;
             }
-            QPushButton:hover { background:#242f3e; border-color:#4b83bd; }
-            QPushButton:pressed { background:#101722; }
-            QPushButton:disabled { color:#667487; background:#151a22; border-color:#252d38; }
+            QPushButton:hover { background:#292929; border-color:#c8c8c8; }
+            QPushButton:pressed { background:#050505; }
+            QPushButton:disabled { color:#777777; background:#101010; border-color:#333333; }
             QPushButton#primary, QPushButton#navActive {
-                background:#0867d8; border:1px solid #2389ff; color:white; font-weight:800;
+                background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #292929,stop:0.5 #080808,stop:1 #191919);
+                border:1px solid #a0a0a0; color:#ffffff; font-weight:800;
             }
-            QPushButton#primary:hover, QPushButton#navActive:hover { background:#1478ed; }
+            QPushButton#primary:hover, QPushButton#navActive:hover { background:#303030; }
             QLineEdit, QTextEdit {
-                background:#090e15; color:#edf4ff; border:1px solid #2a394b;
-                border-radius:8px; padding:9px; selection-background-color:#176fd0;
+                background:#050505; color:#f5f5f5; border:1px solid #777777;
+                border-radius:10px; padding:9px; selection-background-color:#555555;
             }
-            QLineEdit:focus, QTextEdit:focus { border:1px solid #2788ed; }
-            QProgressBar { background:#252d38; border:0; border-radius:6px; }
-            QProgressBar::chunk { background:#1684ff; border-radius:6px; }
-            QCheckBox { spacing:8px; color:#9fb2c9; }
-            QCheckBox::indicator { width:16px; height:16px; border:1px solid #4d6683; border-radius:4px; background:#0b1119; }
-            QCheckBox::indicator:checked { background:#1684ff; border-color:#1684ff; }
+            QLineEdit:focus, QTextEdit:focus { border:1px solid #bdbdbd; }
+            QProgressBar { background:#383838; border:0; border-radius:7px; }
+            QProgressBar::chunk { background:#d8d8d8; border-radius:7px; }
+            QCheckBox { spacing:7px; color:#f0f0f0; font-size:9pt; }
+            QCheckBox::indicator { width:15px; height:15px; border:1px solid #b5b5b5; border-radius:3px; background:#080808; }
+            QCheckBox::indicator:checked { background:#eeeeee; border:1px solid #ffffff; }
             QGroupBox {
-                background:#0d1118; border:1px solid #252e3b; border-radius:12px;
-                margin-top:12px; padding:12px; color:#8fa8c5; font-weight:700;
+                background:#080808; border:1px solid #555555; border-radius:15px;
+                margin-top:12px; padding:12px; color:#f2f2f2; font-weight:800;
             }
-            QGroupBox::title { subcontrol-origin:margin; left:12px; padding:0 6px; }
+            QGroupBox::title { subcontrol-origin:margin; left:14px; padding:0 6px; }
         """)
 
     def set_files(self, files):
@@ -649,7 +667,16 @@ class MainWindow(QMainWindow):
         d = QFileDialog.getExistingDirectory(self, "Choose output folder", self.output.text())
         if d:
             self.output.setText(d)
-            self.settings.setValue("default_output", d)
+            if self.default_output_checkbox.isChecked():
+                self.settings.setValue("default_output", d)
+                self.settings.setValue("default_output_enabled", True)
+
+    def set_default_output_enabled(self, enabled):
+        """Persist the chosen destination when the default checkbox is enabled."""
+        self.settings.setValue("default_output_enabled", bool(enabled))
+        if enabled:
+            self.settings.setValue("default_output", self.output.text().strip())
+        self.settings.sync()
 
     def open_output_folder(self):
         folder = Path(self.output.text()).expanduser()
