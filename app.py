@@ -395,7 +395,7 @@ class MainWindow(QMainWindow):
                 renderer = QSvgRenderer(str(logo_path))
                 if not renderer.isValid():
                     raise ValueError("The packaged E-PIX logo SVG is invalid")
-                logo_size = renderer.defaultSize().scaled(600, 176, Qt.KeepAspectRatio)
+                logo_size = renderer.defaultSize().scaled(620, 190, Qt.KeepAspectRatio)
                 pix = QPixmap(logo_size)
                 pix.fill(Qt.transparent)
                 painter = QPainter(pix)
@@ -562,7 +562,7 @@ class MainWindow(QMainWindow):
         page.addLayout(content, 1)
 
         # Activity log remains available below the dashboard.
-        log_group = QGroupBox("ACTIVITY / RESULTS")
+        log_group = QGroupBox("▂▅▇  ACTIVITY / RESULTS")
         log_layout = QVBoxLayout(log_group)
         self.log = QTextEdit()
         self.log.setReadOnly(True)
