@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, sys, traceback, time
+import os, sys, traceback, time, base64
 from io import BytesIO
 from pathlib import Path
 import cv2
@@ -9,8 +9,7 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter, ImageChops
 from PySide6.QtCore import QObject, Signal, QThread, QTimer, Qt, QUrl, QSettings
-from PySide6.QtGui import QPixmap, QDesktopServices, QPainter
-from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtGui import QPixmap, QDesktopServices, QIcon
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox, QFrame, QSizePolicy)
 
 APP_NAME = "E-PIX PRO"
@@ -367,6 +366,15 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
+        icon_path = resource_path("assets/epix_icon.png.b64")
+        if icon_path.exists():
+            try:
+                icon_bytes = base64.b64decode(icon_path.read_text(encoding="ascii"))
+                icon_pixmap = QPixmap()
+                if icon_pixmap.loadFromData(icon_bytes, "PNG"):
+                    self.setWindowIcon(QIcon(icon_pixmap))
+            except Exception as icon_error:
+                print(f"Warning: E-PIX application icon could not be loaded: {icon_error}")
         self.resize(1600, 900)
         self.setMinimumSize(1180, 720)
         self.files = []
@@ -389,19 +397,15 @@ class MainWindow(QMainWindow):
         self.logo_label = QLabel()
         self.logo_label.setFixedSize(560, 170)
         self.logo_label.setStyleSheet("background:transparent;border:0;")
-        logo_path = resource_path("assets/epix_logo.svg")
+        logo_path = resource_path("assets/epix_logo.png.b64")
         logo_loaded = False
         if logo_path.exists():
             try:
-                renderer = QSvgRenderer(str(logo_path))
-                if not renderer.isValid():
-                    raise ValueError("The packaged E-PIX logo SVG is invalid")
-                logo_size = renderer.defaultSize().scaled(560, 170, Qt.KeepAspectRatio)
-                pix = QPixmap(logo_size)
-                pix.fill(Qt.transparent)
-                painter = QPainter(pix)
-                renderer.render(painter)
-                painter.end()
+                logo_bytes = base64.b64decode(logo_path.read_text(encoding="ascii"))
+                pix = QPixmap()
+                if not pix.loadFromData(logo_bytes, "PNG"):
+                    raise ValueError("The packaged E-PIX logo PNG is invalid")
+                pix = pix.scaled(560, 170, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.logo_label.setPixmap(pix)
                 self.logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                 logo_loaded = True
