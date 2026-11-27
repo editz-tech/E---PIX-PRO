@@ -382,11 +382,12 @@ class MainWindow(QMainWindow):
         page.setContentsMargins(16, 10, 16, 12)
         page.setSpacing(10)
 
-        # Brand header: render the supplied E-PIX logo as transparent vector artwork.
+        # Brand header: match the supplied reference header proportions and spacing.
         header = QHBoxLayout()
-        header.setSpacing(16)
+        header.setSpacing(18)
+        header.addSpacing(34)
         self.logo_label = QLabel()
-        self.logo_label.setFixedSize(620, 190)
+        self.logo_label.setFixedSize(560, 170)
         self.logo_label.setStyleSheet("background:transparent;border:0;")
         logo_path = resource_path("assets/epix_logo.svg")
         logo_loaded = False
@@ -395,7 +396,7 @@ class MainWindow(QMainWindow):
                 renderer = QSvgRenderer(str(logo_path))
                 if not renderer.isValid():
                     raise ValueError("The packaged E-PIX logo SVG is invalid")
-                logo_size = renderer.defaultSize().scaled(620, 190, Qt.KeepAspectRatio)
+                logo_size = renderer.defaultSize().scaled(560, 170, Qt.KeepAspectRatio)
                 pix = QPixmap(logo_size)
                 pix.fill(Qt.transparent)
                 painter = QPainter(pix)
@@ -425,7 +426,8 @@ class MainWindow(QMainWindow):
         about_nav = QPushButton("ⓘ  About")
         about_nav.clicked.connect(self.show_about)
         for b in (self.home_button, settings_nav, about_nav):
-            b.setMinimumHeight(42)
+            b.setMinimumSize(100, 50)
+            b.setStyleSheet("padding:10px 16px;")
             header.addWidget(b)
         page.addLayout(header)
 
