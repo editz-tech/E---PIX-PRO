@@ -7,10 +7,10 @@ from portrait_alignment import straighten_portrait
 from shadow_matte import build_subject_alpha
 import numpy as np
 import onnxruntime as ort
-from PIL import Image, ImageOps, ImageFilter, ImageChops
+from PIL import Image, ImageOps, ImageFilter, ImageChops, ImageEnhance
 from PySide6.QtCore import QObject, Signal, QThread, QTimer, Qt, QUrl, QSettings
 from PySide6.QtGui import QPixmap, QDesktopServices, QIcon
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox, QFrame, QSizePolicy)
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox, QFrame, QSizePolicy, QDialog, QSlider)
 
 APP_NAME = "E-PIX PRO"
 RATIO = 35 / 45
@@ -304,7 +304,59 @@ def passport_crop(subject_rgba, face_box=None):
     canvas.alpha_composite(rgba, (0, 0))
     return canvas.convert("RGB")
 
-def process_photo(source, destination, session, face_analyzer):
+
+def apply_photo_adjustments(image, adjustments):
+    """Apply the user's shared light/color settings to every finished ID photo."""
+    values = {key: int(adjustments.get(key, 0)) for key in (
+        "brightness", "exposure", "contrast", "highlights",
+        "shadows", "vignette", "saturation", "warmth"
+    )}
+    if not any(values.values()):
+        return image
+    result = image.convert("RGB")
+    if values["exposure"]:
+        result = ImageEnhance.Brightness(result).enhance(2.0 ** (values["exposure"] / 100.0))
+    if values["brightness"]:
+        result = ImageEnhance.Brightness(result).enhance(max(0.0, 1.0 + values["brightness"] / 100.0))
+    if values["contrast"]:
+        result = ImageEnhance.Contrast(result).enhance(max(0.0, 1.0 + values["contrast"] / 100.0))
+    if values["saturation"]:
+        result = ImageEnhance.Color(result).enhance(max(0.0, 1.0 + values["saturation"] / 100.0))
+
+    if values["highlights"] or values["shadows"] or values["warmth"] or values["vignette"]:
+        pixels = np.asarray(result, dtype=np.float32).copy()
+        luminance = (0.2126 * pixels[:, :, 0] + 0.7152 * pixels[:, :, 1] +
+                     0.0722 * pixels[:, :, 2]) / 255.0
+        amount = values["highlights"] / 100.0
+        if amount:
+            mask = np.clip((luminance - 0.35) / 0.65, 0.0, 1.0) ** 1.5
+            if amount > 0:
+                pixels += (255.0 - pixels) * (mask[:, :, None] * amount * 0.55)
+            else:
+                pixels *= (1.0 - mask[:, :, None] * abs(amount) * 0.65)
+        amount = values["shadows"] / 100.0
+        if amount:
+            mask = np.clip((0.65 - luminance) / 0.65, 0.0, 1.0) ** 1.5
+            if amount > 0:
+                pixels += (255.0 - pixels) * (mask[:, :, None] * amount * 0.55)
+            else:
+                pixels *= (1.0 - mask[:, :, None] * abs(amount) * 0.65)
+        warmth = values["warmth"] / 100.0 * 0.22
+        if warmth:
+            pixels[:, :, 0] *= (1.0 + warmth)
+            pixels[:, :, 2] *= (1.0 - warmth)
+        vignette = values["vignette"] / 100.0 * 0.65
+        if vignette:
+            height, width = pixels.shape[:2]
+            yy, xx = np.ogrid[-1.0:1.0:complex(height), -1.0:1.0:complex(width)]
+            radius = np.sqrt(xx * xx + yy * yy) / np.sqrt(2.0)
+            falloff = np.clip(radius, 0.0, 1.0) ** 1.7
+            pixels *= (1.0 - vignette * falloff)[:, :, None]
+        result = Image.fromarray(np.clip(pixels, 0, 255).astype(np.uint8), "RGB")
+    return result
+
+
+def process_photo(source, destination, session, face_analyzer, adjustments=None):
     with Image.open(source) as opened:
         original = ImageOps.exif_transpose(opened).convert("RGBA")
 
@@ -313,6 +365,7 @@ def process_photo(source, destination, session, face_analyzer):
     # Skip optional per-photo lighting/tone normalization for a faster, neutral pipeline.
     # Use the post-straightening face position to centre the final portrait.
     result = passport_crop(cutout, face_box)
+    result = apply_photo_adjustments(result, adjustments or {})
     result = result.filter(ImageFilter.UnsharpMask(radius=0.9, percent=105, threshold=3))
     destination.parent.mkdir(parents=True, exist_ok=True)
     suffix = destination.suffix.lower()
@@ -339,9 +392,10 @@ class Worker(QObject):
     progress = Signal(int, int, str)
     done = Signal(int, int)
     failed = Signal(str)
-    def __init__(self, files, output):
+    def __init__(self, files, output, adjustments=None):
         super().__init__()
         self.files, self.output = files, output
+        self.adjustments = dict(adjustments or {})
     def run(self):
         try:
             model_dir = resource_path("models")
@@ -355,12 +409,116 @@ class Worker(QObject):
             for i, src in enumerate(self.files, 1):
                 try:
                     target = output_path_for(src, self.output)
-                    framing = process_photo(src, target, session, face_analyzer); ok += 1
+                    framing = process_photo(src, target, session, face_analyzer, self.adjustments); ok += 1
                     self.progress.emit(i, len(self.files), f"Saved ({framing}): {src.name} → {target.name}")
                 except Exception as exc:
                     errors += 1; self.progress.emit(i, len(self.files), f"FAILED: {src.name}: {exc}")
             self.done.emit(ok, errors)
         except Exception: self.failed.emit(traceback.format_exc())
+
+
+class AdjustmentDialog(QDialog):
+    """Compact dark adjustment panel; values are shared by the entire batch."""
+    CONTROL_SPECS = (
+        ("brightness", "☼", "Brightness"),
+        ("exposure", "◉", "Exposure"),
+        ("contrast", "◐", "Contrast"),
+        ("highlights", "◌", "Highlights"),
+        ("shadows", "◍", "Shadows"),
+        ("vignette", "●", "Vignette"),
+        ("saturation", "✎", "Saturation"),
+        ("warmth", "♨", "Warmth"),
+    )
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Photo Adjustments")
+        self.setModal(False)
+        self.setMinimumSize(430, 700)
+        self.resize(455, 780)
+        self.controls = {}
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(18, 14, 18, 16)
+        outer.setSpacing(10)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
+        title = QLabel("Light")
+        title.setObjectName("adjustSection")
+        layout.addWidget(title)
+        for key, glyph, caption in self.CONTROL_SPECS:
+            if key == "saturation":
+                color_title = QLabel("Color")
+                color_title.setObjectName("adjustSection")
+                color_title.setContentsMargins(0, 24, 0, 0)
+                layout.addWidget(color_title)
+            row = QHBoxLayout()
+            name = QLabel(f"{glyph}  {caption}")
+            name.setObjectName("adjustName")
+            value = QLabel("0")
+            value.setObjectName("adjustValue")
+            value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            value.setMinimumWidth(30)
+            row.addWidget(name, 1)
+            row.addWidget(value)
+            layout.addLayout(row)
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(-100, 100)
+            slider.setValue(0)
+            slider.setObjectName("photoAdjustmentSlider")
+            slider.valueChanged.connect(lambda v, label=value: label.setText(str(v)))
+            self.controls[key] = slider
+            layout.addWidget(slider)
+            layout.addSpacing(5)
+        layout.addStretch(1)
+        scroll.setWidget(body)
+        outer.addWidget(scroll, 1)
+        buttons = QHBoxLayout()
+        reset = QPushButton("Reset")
+        reset.clicked.connect(self.reset_values)
+        done = QPushButton("Done")
+        done.setObjectName("adjustDone")
+        done.clicked.connect(self.hide)
+        buttons.addWidget(reset)
+        buttons.addStretch(1)
+        buttons.addWidget(done)
+        outer.addLayout(buttons)
+        self.setStyleSheet("""
+            QDialog { background:#242424; color:#f1f1f1; font-family:"Segoe UI"; }
+            QLabel { color:#f1f1f1; font-size:11pt; }
+            QLabel#adjustSection { font-size:13pt; font-weight:750; padding:4px 0; }
+            QLabel#adjustName, QLabel#adjustValue { font-size:11pt; }
+            QSlider#photoAdjustmentSlider { min-height:25px; }
+            QSlider#photoAdjustmentSlider::groove:horizontal {
+                height:5px; background:#505050; border-radius:2px;
+            }
+            QSlider#photoAdjustmentSlider::sub-page:horizontal,
+            QSlider#photoAdjustmentSlider::add-page:horizontal {
+                background:#505050; border-radius:2px;
+            }
+            QSlider#photoAdjustmentSlider::handle:horizontal {
+                background:#42c5ff; border:5px solid #414141;
+                width:18px; height:18px; margin:-8px 0; border-radius:13px;
+            }
+            QPushButton {
+                background:#303030; color:#f5f5f5; border:1px solid #555555;
+                border-radius:9px; padding:9px 18px; min-width:75px;
+            }
+            QPushButton:hover { background:#3a3a3a; border-color:#777777; }
+            QPushButton#adjustDone { background:#343434; border-color:#777777; font-weight:700; }
+        """)
+
+    def values(self):
+        return {key: slider.value() for key, slider in self.controls.items()}
+
+    def reset_values(self):
+        for slider in self.controls.values():
+            slider.setValue(0)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -422,17 +580,23 @@ class MainWindow(QMainWindow):
         header.addWidget(self.logo_label)
         header.addStretch(1)
 
-        self.home_button = QPushButton("⌂  Home")
-        self.home_button.setObjectName("navActive")
-        self.home_button.clicked.connect(lambda: self.status.setText("Home • Ready to process"))
-        settings_nav = QPushButton("⚙  Settings")
-        settings_nav.clicked.connect(self.choose_output)
-        about_nav = QPushButton("ⓘ  About")
-        about_nav.clicked.connect(self.show_about)
-        for b in (self.home_button, settings_nav, about_nav):
-            b.setMinimumSize(100, 50)
-            b.setStyleSheet("padding:10px 16px;")
-            header.addWidget(b)
+        # Single sun/moon control opens the photo-wide light and color tools.
+        self.adjust_button = QPushButton("☼     ☾")
+        self.adjust_button.setCheckable(True)
+        self.adjust_button.setFixedSize(164, 58)
+        self.adjust_button.setCursor(Qt.PointingHandCursor)
+        self.adjust_button.setToolTip("Open photo light and color adjustments")
+        self.adjust_button.setStyleSheet("""
+            QPushButton {
+                background:#eeeeee; color:#171717; border:1px solid #aaaaaa;
+                border-radius:29px; padding:8px 18px; font-size:20px; font-weight:700;
+            }
+            QPushButton:hover { border-color:#ffffff; background:#ffffff; }
+            QPushButton:checked { background:#343434; color:#ffffff; border-color:#777777; }
+        """)
+        self.adjustments_dialog = AdjustmentDialog(self)
+        self.adjust_button.toggled.connect(self.toggle_adjustments)
+        header.addWidget(self.adjust_button)
         page.addLayout(header)
 
         hero = QHBoxLayout()
@@ -617,6 +781,14 @@ class MainWindow(QMainWindow):
             QGroupBox::title { subcontrol-origin:margin; left:14px; padding:0 6px; }
         """)
 
+    def toggle_adjustments(self, checked):
+        if checked:
+            self.adjustments_dialog.show()
+            self.adjustments_dialog.raise_()
+            self.adjustments_dialog.activateWindow()
+        else:
+            self.adjustments_dialog.hide()
+
     def set_files(self, files):
         self.files = list(dict.fromkeys(
             Path(f) for f in files
@@ -709,7 +881,7 @@ class MainWindow(QMainWindow):
         self.elapsed_timer.start()
         self.status.setText("Starting offline processing…")
         self.thread = QThread()
-        self.worker = Worker(self.files, Path(self.output.text()).expanduser())
+        self.worker = Worker(self.files, Path(self.output.text()).expanduser(), self.adjustments_dialog.values())
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.on_progress)
