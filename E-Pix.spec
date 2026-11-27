@@ -1,5 +1,5 @@
 from PyInstaller.utils.hooks import collect_all
-datas = [("models/u2net.onnx", "models"), ("assets/epix_logo.svg", "assets")]
+datas = [("models/u2net.onnx", "models"), ("assets/epix_logo.png.b64", "assets"), ("assets/epix_icon.png.b64", "assets")]
 binaries = []
 hiddenimports = []
 for package in ("onnxruntime", "PIL", "numpy", "cv2", "mediapipe"):
@@ -13,6 +13,6 @@ a = Analysis(["app.py"], pathex=[], binaries=binaries, datas=datas,
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="E-PIX PRO",
           debug=False, bootloader_ignore_signals=False, strip=False,
-          upx=False, console=False)
+          upx=False, console=False, icon="assets/epix_icon.ico")
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False,
                name="E-PIX PRO")
