@@ -482,7 +482,7 @@ class AdjustmentDialog(QDialog):
         reset.clicked.connect(self.reset_values)
         done = QPushButton("Done")
         done.setObjectName("adjustDone")
-        done.clicked.connect(self.hide)
+        done.clicked.connect(self.reject)
         buttons.addWidget(reset)
         buttons.addStretch(1)
         buttons.addWidget(done)
@@ -596,6 +596,7 @@ class MainWindow(QMainWindow):
         """)
         self.adjustments_dialog = AdjustmentDialog(self)
         self.adjust_button.toggled.connect(self.toggle_adjustments)
+        self.adjustments_dialog.finished.connect(lambda _result: self.adjust_button.setChecked(False))
         header.addWidget(self.adjust_button)
         page.addLayout(header)
 
