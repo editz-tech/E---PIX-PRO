@@ -406,7 +406,7 @@ class MainWindow(QMainWindow):
                 if not pix.loadFromData(logo_bytes, "PNG"):
                     raise ValueError("The packaged E-PIX logo PNG is invalid")
                 pix = pix.scaled(560, 170, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.logo_label.setPixmap(pix)
+                self.logo_label.setPixmap(pix.scaled(self.logo_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
                 self.logo_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                 logo_loaded = True
             except Exception as logo_error:
