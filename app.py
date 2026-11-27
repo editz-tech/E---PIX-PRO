@@ -10,7 +10,7 @@ import onnxruntime as ort
 from PIL import Image, ImageOps, ImageFilter, ImageChops, ImageEnhance
 from PySide6.QtCore import QObject, Signal, QThread, QTimer, Qt, QUrl, QSettings
 from PySide6.QtGui import QPixmap, QDesktopServices, QIcon
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox, QFrame, QSizePolicy, QDialog, QSlider)
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel, QFileDialog, QLineEdit, QProgressBar, QCheckBox, QTextEdit, QGroupBox, QMessageBox, QFrame, QSizePolicy, QDialog, QSlider, QScrollArea)
 
 APP_NAME = "E-PIX PRO"
 RATIO = 35 / 45
