@@ -73,6 +73,43 @@ jobs:
       - name: Build portable application folder
         run: pyinstaller --noconfirm --clean "E-Pix.spec"
 
+      # Optional Authenticode signing. Add the PFX certificate and password as
+      # repository Actions secrets when a trusted code-signing certificate is purchased.
+      - name: Sign Windows executable when a certificate is configured
+        shell: pwsh
+        env:
+          EPIX_SIGNING_CERT_BASE64: ${{ secrets.EPIX_SIGNING_CERT_BASE64 }}
+          EPIX_SIGNING_CERT_PASSWORD: ${{ secrets.EPIX_SIGNING_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:EPIX_SIGNING_CERT_BASE64) -or
+              [string]::IsNullOrWhiteSpace($env:EPIX_SIGNING_CERT_PASSWORD)) {
+            Write-Warning "No code-signing certificate is configured. This build will remain unsigned; browser/SmartScreen reputation warnings may still appear."
+            exit 0
+          }
+
+          $pfxPath = Join-Path $env:RUNNER_TEMP "epix-code-signing.pfx"
+          try {
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:EPIX_SIGNING_CERT_BASE64))
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse -ErrorAction Stop |
+              Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+            if (-not $signtool) { throw "Windows SDK signtool.exe was not found on the build runner." }
+
+            $exePath = Join-Path $PWD "dist\E-PIX PRO\E-PIX PRO.exe"
+            & $signtool sign /fd SHA256 /f $pfxPath /p $env:EPIX_SIGNING_CERT_PASSWORD /tr "http://timestamp.digicert.com" /td SHA256 $exePath
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed with exit code $LASTEXITCODE." }
+            & $signtool verify /pa /v $exePath
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode signature verification failed." }
+            Write-Host "The E-PIX PRO executable was signed and its Authenticode signature verified."
+          }
+          finally {
+            Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue
+            Remove-Item Env:EPIX_SIGNING_CERT_BASE64 -ErrorAction SilentlyContinue
+            Remove-Item Env:EPIX_SIGNING_CERT_PASSWORD -ErrorAction SilentlyContinue
+          }
+
       - name: Validate application payload and create portable ZIP
         shell: pwsh
         run: |
