@@ -111,7 +111,7 @@ jobs:
           AppName=E-PIX PRO
           AppVersion=0.1.0
           AppPublisher=E-PIX PRO
-          SetupIconFile=..\\assets\\epix_icon.ico
+          SetupIconFile=..\assets\epix_icon.ico
           DefaultDirName={autopf}\E-PIX PRO
           DefaultGroupName=E-PIX PRO
           OutputDir=.
@@ -121,7 +121,7 @@ jobs:
           ArchitecturesInstallIn64BitMode=x64
           PrivilegesRequired=admin
           Uninstallable=yes
-          UninstallDisplayIcon={app}\\E-PIX PRO.exe
+          UninstallDisplayIcon={app}\E-PIX PRO.exe
           CloseApplications=yes
           [Tasks]
           Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
