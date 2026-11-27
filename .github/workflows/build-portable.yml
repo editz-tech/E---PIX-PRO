@@ -136,7 +136,22 @@ jobs:
             throw "Microsoft Defender scan cmdlets are unavailable on this runner. Refusing to publish an unscanned build."
           }
 
-          Update-MpSignature -ErrorAction Stop
+          # Signature updates can fail on hosted runners when the update service is
+          # temporarily unavailable. Keep the scan mandatory and use the runner's
+          # installed signatures as a fallback rather than skipping security checks.
+          try {
+            Update-MpSignature -ErrorAction Stop
+            Write-Host "Microsoft Defender signatures updated successfully."
+          }
+          catch {
+            Write-Warning "Microsoft Defender signature update failed: $($_.Exception.Message)"
+            $defenderStatus = Get-MpComputerStatus -ErrorAction Stop
+            if (-not $defenderStatus.AntivirusSignatureLastUpdated) {
+              throw "Defender signature update failed and no existing signature timestamp is available. Refusing to publish an unscanned build."
+            }
+            Write-Warning "Continuing mandatory scans with the runner's installed Defender signatures (last updated: $($defenderStatus.AntivirusSignatureLastUpdated))."
+          }
+
           $scanStarted = Get-Date
           Start-MpScan -ScanType CustomScan -ScanPath (Join-Path $PWD "dist\E-PIX PRO") -ErrorAction Stop
           Start-MpScan -ScanType CustomScan -ScanPath (Join-Path $PWD "E-PIX-PRO-Portable.zip") -ErrorAction Stop
