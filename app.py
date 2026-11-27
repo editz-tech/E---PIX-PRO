@@ -544,7 +544,7 @@ class MainWindow(QMainWindow):
         timer_caption.setObjectName("panelTitle")
         progress_layout.addWidget(timer_caption)
         self.elapsed_label = QLabel("00:00:00")
-        self.elapsed_label.setStyleSheet("font-size:25px;font-weight:800;color:#69adff;")
+        self.elapsed_label.setStyleSheet("font-size:25px;font-weight:800;color:#ffffff;")
         progress_layout.addWidget(self.elapsed_label)
         self.elapsed_timer = QTimer(self)
         self.elapsed_timer.setInterval(250)
